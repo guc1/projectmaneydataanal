@@ -1,13 +1,14 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useId } from 'react';
 import { CloudUpload, FileCheck2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
+import { useUploadContext, type UploadSlotKey } from './upload-context';
 
 interface UploadSlot {
-  key: 'dataset' | 'dictionary' | 'summary';
+  key: UploadSlotKey;
   title: string;
   description: string;
   helper: string;
@@ -44,16 +45,13 @@ const uploadSlots: UploadSlot[] = [
 
 export function UploadPanel() {
   const controlId = useId();
-  const [selectedFiles, setSelectedFiles] = useState<Record<UploadSlot['key'], string | null>>({
-    dataset: null,
-    dictionary: null,
-    summary: null
-  });
+  const { selectedFiles, errors, registerFile } = useUploadContext();
 
-  const handleFileChange = (slot: UploadSlot['key'], event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (slot: UploadSlotKey, event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    setSelectedFiles((prev) => ({ ...prev, [slot]: file.name }));
+    await registerFile(slot, file);
+    event.target.value = '';
   };
 
   return (
@@ -81,7 +79,7 @@ export function UploadPanel() {
                 id={`${controlId}-${index}`}
                 type="file"
                 accept={slot.accept}
-                onChange={(event) => handleFileChange(slot.key, event)}
+                onChange={(event) => void handleFileChange(slot.key, event)}
                 className="hidden"
               />
               <Button asChild className="w-full justify-center">
@@ -97,6 +95,7 @@ export function UploadPanel() {
                 <span>{selectedFiles[slot.key]}</span>
               </div>
             )}
+            {errors[slot.key] && <p className="text-xs text-red-400">{errors[slot.key]}</p>}
           </Card>
         ))}
       </div>
