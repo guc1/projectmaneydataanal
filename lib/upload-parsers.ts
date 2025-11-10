@@ -4,6 +4,8 @@ type HigherIs = ColumnMetadata['higher_is'];
 
 type DictionaryRecord = Omit<ColumnMetadata, 'average' | 'median'>;
 
+export type DatasetRow = Record<string, string>;
+
 type SummaryStats = Record<string, { mean?: number; median?: number }>;
 
 const HIGHER_IS_VALUES: HigherIs[] = ['better', 'worse', 'depends'];
@@ -73,7 +75,7 @@ export function parseCsv(content: string): string[][] {
   return rows.filter((row) => row.some((cell) => cell.trim() !== ''));
 }
 
-function parseCsvToObjects(content: string): Array<Record<string, string>> {
+function parseCsvToObjects(content: string): DatasetRow[] {
   const rows = parseCsv(content);
   if (rows.length === 0) {
     return [];
@@ -82,7 +84,7 @@ function parseCsvToObjects(content: string): Array<Record<string, string>> {
   const headers = rows[0].map((header) => header.trim());
 
   return rows.slice(1).map((row) => {
-    const entry: Record<string, string> = {};
+    const entry: DatasetRow = {};
     headers.forEach((header, index) => {
       entry[header] = row[index] ?? '';
     });
@@ -116,6 +118,27 @@ export function parseDatasetHeaders(content: string): string[] {
     return [];
   }
   return rows[0].map((header) => header.trim()).filter((header) => header.length > 0);
+}
+
+export function parseDataset(content: string): { headers: string[]; rows: DatasetRow[] } {
+  const rows = parseCsv(content);
+  if (rows.length === 0) {
+    return { headers: [], rows: [] };
+  }
+
+  const headers = rows[0].map((header) => header.trim());
+  const dataRows: DatasetRow[] = rows
+    .slice(1)
+    .filter((row) => row.some((cell) => cell.trim() !== ''))
+    .map((row) => {
+      const entry: DatasetRow = {};
+      headers.forEach((header, index) => {
+        entry[header] = row[index] ?? '';
+      });
+      return entry;
+    });
+
+  return { headers, rows: dataRows };
 }
 
 export function parseDictionaryCsv(content: string): DictionaryRecord[] {

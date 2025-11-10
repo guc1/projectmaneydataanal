@@ -10,7 +10,8 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
 import type { ColumnMetadata } from '@/data/column-metadata';
 import { useUploadContext } from '@/components/upload/upload-context';
-import { describeOperator, estimateFilteredRows, getAvailableOperators, type FilterDefinition } from '@/lib/filters';
+import { applyFilters, describeOperator, getAvailableOperators, type FilterDefinition } from '@/lib/filters';
+import type { DatasetRow } from '@/lib/upload-parsers';
 import { cn } from '@/lib/utils';
 
 const EMPTY_COLUMNS: ColumnMetadata[] = [];
@@ -23,27 +24,36 @@ type FormState = {
   error?: string;
 };
 
-const downloadFilters = (filters: FilterDefinition[]) => {
-  const payload = {
-    exportedAt: new Date().toISOString(),
-    totalFilters: filters.length,
-    filters: filters.map(({ id, ...rest }) => rest)
+const downloadFilteredCsv = (rows: DatasetRow[], columns: string[]) => {
+  const escapeCell = (value: string | undefined) => {
+    const cell = value ?? '';
+    if (/[",\n]/.test(cell)) {
+      return `"${cell.replace(/"/g, '""')}"`;
+    }
+    return cell;
   };
 
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const lines = [columns.map((column) => escapeCell(column)).join(',')];
+
+  rows.forEach((row) => {
+    lines.push(columns.map((column) => escapeCell(row[column])).join(','));
+  });
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = 'filtered-results.json';
+  anchor.download = 'filtered-results.csv';
   anchor.click();
   URL.revokeObjectURL(url);
 };
 
 export function FilterBuilder() {
-  const { columnMetadata, isReady, missing } = useUploadContext();
+  const { columnMetadata, datasetColumns, datasetRows, isReady, missing } = useUploadContext();
   const [form, setForm] = useState<FormState>({ valuePrimary: '', valueSecondary: '' });
   const [filters, setFilters] = useState<FilterDefinition[]>([]);
-  const [filteredRows, setFilteredRows] = useState<number | null>(null);
+  const [filterResult, setFilterResult] = useState<DatasetRow[] | null>(null);
+  const [filterError, setFilterError] = useState<string | null>(null);
 
   const availableColumns = columnMetadata ?? EMPTY_COLUMNS;
 
@@ -62,8 +72,14 @@ export function FilterBuilder() {
     setFilters((previous) =>
       previous.filter((filter) => availableColumns.some((column) => column.metric === filter.columnKey))
     );
-    setFilteredRows(null);
+    setFilterResult(null);
+    setFilterError(null);
   }, [availableColumns]);
+
+  useEffect(() => {
+    setFilterResult(null);
+    setFilterError(null);
+  }, [datasetRows]);
 
   const formatNumber = (value: number) => {
     if (Math.abs(value) >= 1000) {
@@ -101,6 +117,7 @@ export function FilterBuilder() {
   const handleSelectColumn = (column: ColumnMetadata) => {
     const operators = getAvailableOperators(column.data_type);
     setForm({ column, operator: operators[0], valuePrimary: '', valueSecondary: '' });
+    setFilterError(null);
   };
 
   const handleAddFilter = () => {
@@ -133,7 +150,7 @@ export function FilterBuilder() {
           setForm((prev) => ({ ...prev, error: 'Provide a valid upper bound.' }));
           return;
         }
-        parsedValue = [primaryNumber, secondaryNumber];
+        parsedValue = [Math.min(primaryNumber, secondaryNumber), Math.max(primaryNumber, secondaryNumber)];
       } else {
         parsedValue = primaryNumber;
       }
@@ -152,16 +169,42 @@ export function FilterBuilder() {
     };
 
     setFilters((prev) => [...prev, nextFilter]);
+    setFilterResult(null);
+    setFilterError(null);
     setForm({ column, operator, valuePrimary: '', valueSecondary: '', error: undefined });
   };
 
   const handleRemoveFilter = (id: string) => {
     setFilters((prev) => prev.filter((filter) => filter.id !== id));
+    setFilterResult(null);
+    setFilterError(null);
   };
 
   const handleFilterDown = () => {
-    setFilteredRows(estimateFilteredRows(filters.length));
+    if (!datasetRows) {
+      setFilterError('Upload a dataset before applying filters.');
+      return;
+    }
+
+    if (filters.length === 0) {
+      setFilterError('Add at least one filter before applying.');
+      return;
+    }
+
+    const result = applyFilters(datasetRows, filters);
+    setFilterResult(result);
+    setFilterError(null);
   };
+
+  const handleExportFiltered = () => {
+    if (!filterResult || !datasetColumns) {
+      return;
+    }
+
+    downloadFilteredCsv(filterResult, datasetColumns);
+  };
+
+  const totalRows = datasetRows?.length ?? 0;
 
   return (
     <div className="mt-16 grid gap-10 lg:grid-cols-[1.2fr_1fr]">
@@ -328,24 +371,33 @@ export function FilterBuilder() {
           </div>
 
           <div className="mt-8 flex flex-wrap items-center gap-3">
-            <Button type="button" variant="outline" className="gap-2" onClick={handleFilterDown} disabled={filters.length === 0}>
+            <Button
+              type="button"
+              variant="outline"
+              className="gap-2"
+              onClick={handleFilterDown}
+              disabled={filters.length === 0 || !datasetRows}
+            >
               <Filter size={16} /> Filter down
             </Button>
             <Button
               type="button"
               className="gap-2"
-              onClick={() => downloadFilters(filters)}
-              disabled={filters.length === 0}
+              onClick={handleExportFiltered}
+              disabled={!filterResult || !datasetColumns}
             >
               <Download size={16} /> Export filtered
             </Button>
           </div>
 
           <p className="mt-4 text-sm text-muted-foreground">
-            {filteredRows === null
-              ? 'Apply the filters to preview how many accounts remain.'
-              : `Estimated rows remaining: ${filteredRows.toLocaleString()}`}
+            {filterResult === null
+              ? totalRows > 0
+                ? `Apply the filters to preview how many of the ${totalRows.toLocaleString()} uploaded rows remain.`
+                : 'Upload a dataset to calculate filtered results.'
+              : `Filtered rows: ${filterResult.length.toLocaleString()} of ${totalRows.toLocaleString()}`}
           </p>
+          {filterError && <p className="mt-2 text-sm text-red-400">{filterError}</p>}
         </Card>
       </aside>
     </div>

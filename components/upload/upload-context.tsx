@@ -4,10 +4,11 @@ import { createContext, useContext, useMemo, useState } from 'react';
 
 import type { ColumnMetadata } from '@/data/column-metadata';
 import {
-  parseDatasetHeaders,
+  parseDataset,
   parseDictionaryCsv,
   parseDictionaryJson,
   parseSummaryCsv,
+  type DatasetRow,
   type DictionaryRecord,
   type SummaryStats
 } from '@/lib/upload-parsers';
@@ -20,6 +21,7 @@ type UploadErrors = Record<UploadSlotKey, string | null>;
 type UploadContextValue = {
   columnMetadata: ColumnMetadata[] | null;
   datasetColumns: string[] | null;
+  datasetRows: DatasetRow[] | null;
   dictionary: DictionaryRecord[] | null;
   summaryStats: SummaryStats;
   selectedFiles: SelectedFiles;
@@ -38,6 +40,7 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
   const [selectedFiles, setSelectedFiles] = useState<SelectedFiles>(EMPTY_FILES);
   const [errors, setErrors] = useState<UploadErrors>(EMPTY_ERRORS);
   const [datasetColumns, setDatasetColumns] = useState<string[] | null>(null);
+  const [datasetRows, setDatasetRows] = useState<DatasetRow[] | null>(null);
   const [dictionary, setDictionary] = useState<DictionaryRecord[] | null>(null);
   const [summaryStats, setSummaryStats] = useState<SummaryStats>({});
 
@@ -78,11 +81,12 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
           if (!file.name.toLowerCase().endsWith('.csv')) {
             throw new Error('Only CSV datasets are supported at the moment.');
           }
-          const headers = parseDatasetHeaders(text);
+          const { headers, rows } = parseDataset(text);
           if (headers.length === 0) {
             throw new Error('No columns detected in dataset.');
           }
           setDatasetColumns(headers);
+          setDatasetRows(rows);
           break;
         }
         case 'dictionary': {
@@ -119,6 +123,7 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
       setErrors((prev) => ({ ...prev, [slot]: message }));
       if (slot === 'dataset') {
         setDatasetColumns(null);
+        setDatasetRows(null);
       }
       if (slot === 'dictionary') {
         setDictionary(null);
@@ -133,6 +138,7 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
   const value: UploadContextValue = {
     columnMetadata,
     datasetColumns,
+    datasetRows,
     dictionary,
     summaryStats,
     selectedFiles,
