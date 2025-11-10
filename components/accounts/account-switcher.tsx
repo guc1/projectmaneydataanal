@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import { Loader2, LogOut, Plus, Users } from 'lucide-react';
-import { signIn, signOut, useSession } from 'next-auth/react';
+import { signOut, useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,7 @@ interface AccountRecord {
 }
 
 export function AccountSwitcher() {
-  const { data: session, status } = useSession();
+  const { data: session, status, update } = useSession();
   const router = useRouter();
   const [accounts, setAccounts] = useState<AccountRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -41,6 +41,43 @@ export function AccountSwitcher() {
       setError('Unable to load accounts.');
     });
   }, [fetchAccounts]);
+
+  const performCredentialsSignIn = useCallback(async (userId: string) => {
+    const csrfResponse = await fetch('/api/auth/csrf', {
+      credentials: 'same-origin'
+    });
+
+    if (!csrfResponse.ok) {
+      throw new Error('Unable to verify the authentication request.');
+    }
+
+    const { csrfToken } = (await csrfResponse.json()) as { csrfToken?: string };
+
+    if (!csrfToken) {
+      throw new Error('Authentication handshake failed.');
+    }
+
+    const body = new URLSearchParams({
+      csrfToken,
+      userId,
+      callbackUrl: typeof window !== 'undefined' ? window.location.origin : '/'
+    });
+
+    const response = await fetch('/api/auth/callback/credentials', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: body.toString(),
+      credentials: 'same-origin'
+    });
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      const message = typeof payload.error === 'string' ? payload.error : 'Failed to switch accounts.';
+      throw new Error(message);
+    }
+  }, []);
 
   const handleCreateAccount = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -70,12 +107,8 @@ export function AccountSwitcher() {
 
       const { user } = (await response.json()) as { user: AccountRecord };
       await fetchAccounts();
-      const result = await signIn('credentials', { userId: user.id, redirect: false });
-
-      if (result?.error) {
-        throw new Error(result.error);
-      }
-
+      await performCredentialsSignIn(user.id);
+      await update();
       router.refresh();
       setForm({ name: '', image: '', staffCode: '' });
       setImageName('');
@@ -91,12 +124,8 @@ export function AccountSwitcher() {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await signIn('credentials', { userId: accountId, redirect: false });
-
-      if (result?.error) {
-        throw new Error(result.error);
-      }
-
+      await performCredentialsSignIn(accountId);
+      await update();
       router.refresh();
       setIsOpen(false);
     } catch (err) {
@@ -138,6 +167,23 @@ export function AccountSwitcher() {
     return accounts.find((account) => account.id === session.user?.id) ?? null;
   }, [accounts, session?.user?.id]);
 
+  const activeAccountName = currentAccount?.name ?? session?.user?.name ?? 'Select account';
+  const activeAccountImage = currentAccount?.image ?? session?.user?.image ?? null;
+  const hasActiveAccount = !!(currentAccount || session?.user?.id);
+  const activeInitials = useMemo(() => {
+    if (!hasActiveAccount) {
+      return 'NA';
+    }
+
+    return activeAccountName
+      .split(' ')
+      .map((part) => part.trim().charAt(0))
+      .filter(Boolean)
+      .join('')
+      .slice(0, 2)
+      .toUpperCase();
+  }, [activeAccountName, hasActiveAccount]);
+
   return (
     <div className="relative">
       <Button
@@ -146,8 +192,20 @@ export function AccountSwitcher() {
         onClick={() => setIsOpen((prev) => !prev)}
         className="flex items-center gap-2"
       >
-        <Users className="h-4 w-4" />
-        {currentAccount?.name ?? session?.user?.name ?? 'Select account'}
+        {isLoading ? (
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        ) : activeAccountImage ? (
+          <img src={activeAccountImage} alt={activeAccountName} className="h-6 w-6 rounded-full object-cover" />
+        ) : hasActiveAccount ? (
+          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-[10px] font-semibold uppercase text-foreground/80">
+            {activeInitials}
+          </div>
+        ) : (
+          <Users className="h-4 w-4" />
+        )}
+        <span className="text-sm font-medium text-foreground">
+          {status === 'loading' ? 'Loading…' : activeAccountName}
+        </span>
       </Button>
 
       {isOpen && (
@@ -164,6 +222,7 @@ export function AccountSwitcher() {
           </div>
 
           <div className="mt-3 space-y-2">
+            {error && <p className="text-xs text-red-400">{error}</p>}
             {accounts.length === 0 && <p className="text-xs text-muted-foreground">No accounts yet.</p>}
             {accounts.map((account) => (
               <button
@@ -219,7 +278,6 @@ export function AccountSwitcher() {
               onChange={(event) => setForm((prev) => ({ ...prev, staffCode: event.target.value }))}
               required
             />
-            {error && <p className="text-xs text-red-400">{error}</p>}
             <Button type="submit" className="w-full" disabled={isLoading}>
               {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
               Create & use account
@@ -232,7 +290,7 @@ export function AccountSwitcher() {
               variant="ghost"
               className="mt-3 w-full justify-center text-sm"
               onClick={() => {
-                void signOut({ redirect: false });
+                void signOut({ redirect: false }).then(() => update());
                 setIsOpen(false);
               }}
             >
