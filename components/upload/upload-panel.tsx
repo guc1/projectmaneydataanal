@@ -96,14 +96,14 @@ function UploadCard({
   allRecords: UploadRecord[];
   onRefresh: () => void;
 }) {
-  const { status } = useSession();
+  const { data: session, status } = useSession();
   const [mode, setMode] = useState<'idle' | 'upload' | 'existing'>('idle');
   const [scope, setScope] = useState<ExistingScope>('button');
   const [file, setFile] = useState<File | null>(null);
   const [description, setDescription] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const isAuthenticated = status === 'authenticated';
+  const isAuthenticated = status === 'authenticated' && !!session?.user?.id;
 
   const visibleRecords = useMemo(() => (scope === 'all' ? allRecords : records), [scope, allRecords, records]);
 
