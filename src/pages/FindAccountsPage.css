@@ -1,0 +1,140 @@
+.action-group {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+}
+
+.secondary-button {
+  padding: 0.7rem 1.3rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.7);
+  color: #e0f2fe;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.secondary-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.secondary-button:not(:disabled):hover {
+  transform: translateY(-2px);
+  border-color: rgba(56, 189, 248, 0.5);
+}
+
+.status-bar {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5rem;
+  padding: 1.5rem;
+  border-radius: 1.1rem;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.status-bar .label {
+  display: block;
+  font-size: 0.8rem;
+  color: rgba(148, 163, 184, 0.75);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.status-bar strong {
+  display: block;
+  margin-top: 0.45rem;
+  font-size: 1.5rem;
+}
+
+.filter-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) 1fr;
+  gap: 1.5rem;
+}
+
+.columns-panel {
+  position: sticky;
+  top: 2rem;
+  align-self: start;
+}
+
+.builder-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.filters-list {
+  padding: 1.5rem;
+  border-radius: 1.1rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(15, 23, 42, 0.75);
+}
+
+.filters-list h3 {
+  margin: 0 0 1rem;
+}
+
+.results-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.5rem;
+  border-radius: 1.1rem;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(15, 23, 42, 0.75);
+}
+
+.table-wrapper {
+  overflow-x: auto;
+  border-radius: 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 480px;
+}
+
+thead {
+  background: rgba(30, 41, 59, 0.8);
+}
+
+th,
+td {
+  padding: 0.75rem 0.9rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  font-size: 0.85rem;
+}
+
+tbody tr:hover {
+  background: rgba(30, 41, 59, 0.6);
+}
+
+.preview-hint {
+  margin: 0.75rem 0 0;
+  color: rgba(148, 163, 184, 0.7);
+  font-size: 0.85rem;
+}
+
+.empty-state {
+  padding: 2rem;
+  border-radius: 1.1rem;
+  border: 1px dashed rgba(148, 163, 184, 0.25);
+  color: rgba(148, 163, 184, 0.75);
+}
+
+@media (max-width: 1024px) {
+  .filter-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .columns-panel {
+    position: static;
+  }
+}
