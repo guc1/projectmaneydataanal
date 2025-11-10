@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
+import { AccountSwitcher } from '@/components/accounts/account-switcher';
 import { Button } from '@/components/ui/button';
 
 const navigationItems = [
@@ -23,7 +24,7 @@ export function SiteHeader() {
           Project Maney
         </Link>
 
-        <nav className="flex items-center gap-2">
+        <nav className="flex items-center gap-4">
           {navigationItems.map((item) => {
             const isActive = pathname === item.href || pathname?.startsWith(`${item.href}/`);
 
@@ -39,6 +40,7 @@ export function SiteHeader() {
               </Button>
             );
           })}
+          <AccountSwitcher />
         </nav>
       </div>
     </header>
