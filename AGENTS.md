@@ -2,6 +2,7 @@ Stack Overview
 Framework: Next.js (App Router, React 19)
 Language: TypeScript
 Package Manager: pnpm
+Local setup: run `pnpm install` then `pnpm dev --port 3006`
 Database: PostgreSQL with Drizzle ORM (Neon)
 Authentication: NextAuth.js (credentials, Google OAuth, guest login)
 Styling: Tailwind CSS with shadcn/ui (Radix UI for accessibility)
