@@ -17,6 +17,23 @@ const uploadSchema = z.object({
 
 const uploadsRoot = path.join(process.cwd(), 'data', 'uploads');
 
+const DEFAULT_FILE_NAME = 'upload.bin';
+
+function isFileLike(value: unknown): value is Blob & { name?: string } {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  if ('arrayBuffer' in value && typeof (value as Blob).arrayBuffer === 'function') {
+    return true;
+  }
+
+  return false;
+}
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
 export async function POST(request: Request) {
   const session = await auth();
 
@@ -29,9 +46,11 @@ export async function POST(request: Request) {
   const buttonKey = formData.get('buttonKey');
   const description = formData.get('description');
 
-  if (!(file instanceof File)) {
+  if (!isFileLike(file)) {
     return NextResponse.json({ error: 'File upload missing.' }, { status: 400 });
   }
+
+  const originalName = 'name' in file && typeof file.name === 'string' ? file.name : DEFAULT_FILE_NAME;
 
   const parsed = uploadSchema.safeParse({
     buttonKey: typeof buttonKey === 'string' ? buttonKey : '',
@@ -43,7 +62,7 @@ export async function POST(request: Request) {
   }
 
   const fileId = randomUUID();
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
   const targetDir = path.join(uploadsRoot, parsed.data.buttonKey);
   const targetPath = path.join(targetDir, `${fileId}-${safeName}`);
 
@@ -56,7 +75,7 @@ export async function POST(request: Request) {
     .values({
       id: fileId,
       buttonKey: parsed.data.buttonKey,
-      fileName: file.name,
+      fileName: originalName,
       description: parsed.data.description,
       filePath: path.relative(process.cwd(), targetPath),
       uploadedByUserId: session.user.id
