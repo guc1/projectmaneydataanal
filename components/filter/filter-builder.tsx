@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { Download, Filter, PlusCircle, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { Download, Filter, FolderOpen, PlusCircle, Save, SlidersHorizontal, Trash2 } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 
 import { Button } from '@/components/ui/button';
@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
 import type { ColumnMetadata } from '@/data/column-metadata';
-import { useUploadContext } from '@/components/upload/upload-context';
+import { useUploadContext, type UploadSlotKey } from '@/components/upload/upload-context';
 import { applyFilters, describeOperator, getAvailableOperators, type FilterDefinition } from '@/lib/filters';
 import type { DatasetRow } from '@/lib/upload-parsers';
 import { cn } from '@/lib/utils';
@@ -49,11 +49,24 @@ const downloadFilteredCsv = (rows: DatasetRow[], columns: string[]) => {
 };
 
 export function FilterBuilder() {
-  const { columnMetadata, datasetColumns, datasetRows, isReady, missing } = useUploadContext();
+  const {
+    columnMetadata,
+    datasetColumns,
+    datasetRows,
+    isReady,
+    missing,
+    selectedFiles,
+    loadPreset
+  } = useUploadContext();
   const [form, setForm] = useState<FormState>({ valuePrimary: '', valueSecondary: '' });
   const [filters, setFilters] = useState<FilterDefinition[]>([]);
   const [filterResult, setFilterResult] = useState<DatasetRow[] | null>(null);
   const [filterError, setFilterError] = useState<string | null>(null);
+  const [presetFeedback, setPresetFeedback] = useState<string | null>(null);
+  const [presetError, setPresetError] = useState<string | null>(null);
+  const [presetOpen, setPresetOpen] = useState(false);
+  const presetMenuRef = useRef<HTMLDivElement>(null);
+  const presetInputRef = useRef<HTMLInputElement>(null);
 
   const availableColumns = columnMetadata ?? EMPTY_COLUMNS;
 
@@ -80,6 +93,27 @@ export function FilterBuilder() {
     setFilterResult(null);
     setFilterError(null);
   }, [datasetRows]);
+
+  useEffect(() => {
+    if (!presetOpen) {
+      return;
+    }
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!presetMenuRef.current) {
+        return;
+      }
+
+      if (!presetMenuRef.current.contains(event.target as Node)) {
+        setPresetOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [presetOpen]);
 
   const formatNumber = (value: number) => {
     if (Math.abs(value) >= 1000) {
@@ -202,6 +236,67 @@ export function FilterBuilder() {
     }
 
     downloadFilteredCsv(filterResult, datasetColumns);
+  };
+
+  const handlePresetToggle = () => {
+    setPresetOpen((previous) => !previous);
+  };
+
+  const handlePresetSave = () => {
+    const payload = {
+      dataset: selectedFiles.dataset ?? null,
+      dictionary: selectedFiles.dictionary ?? null,
+      summary: selectedFiles.summary ?? null
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json;charset=utf-8;'
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'preset.json';
+    anchor.click();
+    URL.revokeObjectURL(url);
+
+    setPresetError(null);
+    setPresetFeedback('Preset saved as preset.json.');
+    setPresetOpen(false);
+  };
+
+  const handlePresetLoadRequest = () => {
+    presetInputRef.current?.click();
+    setPresetOpen(false);
+  };
+
+  const handlePresetFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text) as Partial<Record<UploadSlotKey, string | null>>;
+      const sanitized: Partial<Record<UploadSlotKey, string | null>> = {};
+
+      (['dataset', 'dictionary', 'summary'] as UploadSlotKey[]).forEach((key) => {
+        const value = data[key];
+        if (typeof value === 'string' || value === null) {
+          sanitized[key] = value;
+        }
+      });
+
+      loadPreset(sanitized);
+      setPresetError(null);
+      setPresetFeedback('Preset loaded. Re-upload files if required to restore data.');
+    } catch (error) {
+      console.error(error);
+      setPresetFeedback(null);
+      setPresetError('Failed to load preset. Ensure the JSON is valid.');
+    } finally {
+      event.target.value = '';
+    }
   };
 
   const totalRows = datasetRows?.length ?? 0;
@@ -388,7 +483,43 @@ export function FilterBuilder() {
             >
               <Download size={16} /> Export filtered
             </Button>
+            <div className="relative" ref={presetMenuRef}>
+              <Button type="button" variant="outline" className="gap-2" onClick={handlePresetToggle}>
+                <SlidersHorizontal size={16} /> Preset
+              </Button>
+              {presetOpen && (
+                <div className="absolute right-0 z-10 mt-2 w-56 rounded-lg border border-white/10 bg-background/95 p-2 shadow-xl backdrop-blur">
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-foreground transition hover:bg-white/10"
+                    onClick={handlePresetSave}
+                  >
+                    <Save size={16} /> Save current state
+                  </button>
+                  <button
+                    type="button"
+                    className="mt-1 flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-foreground transition hover:bg-white/10"
+                    onClick={handlePresetLoadRequest}
+                  >
+                    <FolderOpen size={16} /> Load current state
+                  </button>
+                </div>
+              )}
+            </div>
+            <input
+              ref={presetInputRef}
+              type="file"
+              accept="application/json"
+              className="hidden"
+              onChange={handlePresetFileChange}
+            />
           </div>
+
+          {(presetFeedback || presetError) && (
+            <p className={`mt-3 text-sm ${presetError ? 'text-red-400' : 'text-muted-foreground'}`}>
+              {presetError ?? presetFeedback}
+            </p>
+          )}
 
           <p className="mt-4 text-sm text-muted-foreground">
             {filterResult === null
