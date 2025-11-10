@@ -49,7 +49,13 @@ const downloadFilteredCsv = (rows: DatasetRow[], columns: string[]) => {
 };
 
 export function FilterBuilder() {
-  const { columnMetadata, datasetColumns, datasetRows, isReady, missing } = useUploadContext();
+  const {
+    columnMetadata,
+    datasetColumns,
+    datasetRows,
+    isReady,
+    missing
+  } = useUploadContext();
   const [form, setForm] = useState<FormState>({ valuePrimary: '', valueSecondary: '' });
   const [filters, setFilters] = useState<FilterDefinition[]>([]);
   const [filterResult, setFilterResult] = useState<DatasetRow[] | null>(null);
