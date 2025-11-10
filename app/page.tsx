@@ -1,10 +1,10 @@
-import { ArrowRight, Database, Filter } from 'lucide-react';
+import Link from 'next/link';
+import { ArrowRight, Database, Filter, SlidersHorizontal } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
 import { UploadPanel } from '@/components/upload/upload-panel';
 import { FilterBuilder } from '@/components/filter/filter-builder';
-import { UploadProvider } from '@/components/upload/upload-context';
 
 const featureHighlights = [
   {
@@ -26,8 +26,7 @@ const featureHighlights = [
 
 export default function HomePage() {
   return (
-    <UploadProvider>
-      <main className="mx-auto max-w-6xl px-6 pb-20 pt-16">
+    <main className="mx-auto max-w-6xl px-6 pb-20 pt-16">
         <section className="grid gap-10 lg:grid-cols-[1.2fr_1fr] lg:items-center">
         <div className="space-y-6">
           <p className="text-sm uppercase tracking-[0.3em] text-accent">Polymarket intelligence cockpit</p>
@@ -48,6 +47,11 @@ export default function HomePage() {
               <a href="#find-accounts">
                 <Filter size={18} /> Find accounts
               </a>
+            </Button>
+            <Button asChild variant="outline" size="lg" className="gap-2">
+              <Link href="/presets">
+                <SlidersHorizontal size={18} /> Presets
+              </Link>
             </Button>
           </div>
         </div>
@@ -86,7 +90,6 @@ export default function HomePage() {
           </a>
         </Button>
       </footer>
-      </main>
-    </UploadProvider>
+    </main>
   );
 }
