@@ -1,5 +1,6 @@
 import { DrizzleAdapter } from '@auth/drizzle-adapter';
 import { eq } from 'drizzle-orm';
+import { compare } from 'bcryptjs';
 import NextAuth from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 
@@ -16,23 +17,33 @@ export const authOptions = {
     CredentialsProvider({
       name: 'Workspace account',
       credentials: {
-        userId: { label: 'User ID', type: 'text' }
+        username: { label: 'Username', type: 'text' },
+        password: { label: 'Password', type: 'password' }
       },
       async authorize(credentials) {
-        if (!credentials?.userId) {
+        const username = credentials?.username?.toLowerCase().trim();
+        const password = credentials?.password;
+
+        if (!username || !password) {
           return null;
         }
 
-        const [user] = await db.select().from(users).where(eq(users.id, credentials.userId)).limit(1);
+        const [user] = await db.select().from(users).where(eq(users.username, username)).limit(1);
         if (!user) {
+          return null;
+        }
+
+        const passwordMatches = await compare(password, user.passwordHash);
+        if (!passwordMatches) {
           return null;
         }
 
         return {
           id: user.id,
-          name: user.name ?? 'Unnamed analyst',
+          name: user.name ?? user.username,
           image: user.image ?? undefined,
-          email: user.email ?? undefined
+          email: user.email ?? undefined,
+          username: user.username
         };
       }
     })
@@ -48,7 +59,8 @@ export const authOptions = {
           id: users.id,
           name: users.name,
           image: users.image,
-          email: users.email
+          email: users.email,
+          username: users.username
         })
         .from(users)
         .where(eq(users.id, token.id as string))
@@ -60,17 +72,22 @@ export const authOptions = {
       }
 
       session.user = {
+        ...(session.user ?? {}),
         id: existingUser.id,
         name: existingUser.name ?? 'Unnamed analyst',
         image: existingUser.image ?? undefined,
-        email: existingUser.email ?? undefined
-      } as typeof session.user & { id: string };
+        email: existingUser.email ?? undefined,
+        username: existingUser.username
+      };
 
       return session;
     },
     async jwt({ token, user }) {
       if (user?.id) {
         token.id = user.id;
+        if ('username' in user && typeof user.username === 'string') {
+          token.username = user.username;
+        }
       }
 
       return token;

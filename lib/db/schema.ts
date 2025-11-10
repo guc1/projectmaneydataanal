@@ -21,6 +21,8 @@ export const users = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     name: text('name'),
     email: text('email').unique(),
+    username: text('username').notNull(),
+    passwordHash: text('password_hash').notNull(),
     image: text('image'),
     createdAt: timestamp('created_at', { mode: 'date', withTimezone: true })
       .defaultNow()
@@ -30,7 +32,8 @@ export const users = pgTable(
       .notNull()
   },
   (table) => ({
-    usersCreatedAtIdx: index('users_created_at_idx').on(table.createdAt)
+    usersCreatedAtIdx: index('users_created_at_idx').on(table.createdAt),
+    usersUsernameKey: uniqueIndex('users_username_key').on(table.username)
   })
 );
 
