@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Download, Filter, PlusCircle, Trash2 } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 
@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
-import { columnMetadata, type ColumnMetadata } from '@/data/column-metadata';
+import type { ColumnMetadata } from '@/data/column-metadata';
+import { useUploadContext } from '@/components/upload/upload-context';
 import { describeOperator, estimateFilteredRows, getAvailableOperators, type FilterDefinition } from '@/lib/filters';
 import { cn } from '@/lib/utils';
 
@@ -37,9 +38,51 @@ const downloadFilters = (filters: FilterDefinition[]) => {
 };
 
 export function FilterBuilder() {
+  const { columnMetadata, isReady, missing } = useUploadContext();
   const [form, setForm] = useState<FormState>({ valuePrimary: '', valueSecondary: '' });
   const [filters, setFilters] = useState<FilterDefinition[]>([]);
   const [filteredRows, setFilteredRows] = useState<number | null>(null);
+
+  const availableColumns = columnMetadata ?? [];
+
+  useEffect(() => {
+    setForm((previous) => {
+      if (!previous.column) {
+        return previous;
+      }
+      const updatedColumn = availableColumns.find((column) => column.metric === previous.column?.metric);
+      if (updatedColumn) {
+        return { ...previous, column: updatedColumn };
+      }
+      return { valuePrimary: '', valueSecondary: '' };
+    });
+
+    setFilters((previous) =>
+      previous.filter((filter) => availableColumns.some((column) => column.metric === filter.columnKey))
+    );
+    setFilteredRows(null);
+  }, [availableColumns]);
+
+  if (!isReady) {
+    return (
+      <div className="mt-16">
+        <Card className="border-dashed border-white/10 bg-white/5">
+          <CardTitle className="flex items-center gap-2 text-xl">
+            <Filter size={20} /> Build account filters
+          </CardTitle>
+          <CardDescription>
+            Upload the account dataset, column dictionary, and median & averages file to enable filtering.
+          </CardDescription>
+          <p className="mt-6 text-sm text-muted-foreground">
+            Missing uploads:{' '}
+            <span className="font-medium text-foreground">
+              {missing.map((slot) => (slot === 'summary' ? 'median & averages' : `${slot} file`)).join(', ')}
+            </span>
+          </p>
+        </Card>
+      </div>
+    );
+  }
 
   const formatNumber = (value: number) => {
     if (Math.abs(value) >= 1000) {
@@ -133,7 +176,7 @@ export function FilterBuilder() {
             <div>
               <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">1. Choose a column</h4>
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                {columnMetadata.map((column) => {
+                {availableColumns.map((column) => {
                   const active = form.column?.metric === column.metric;
                   return (
                     <Tooltip.Provider key={column.metric} delayDuration={150}>
