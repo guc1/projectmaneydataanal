@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 import type { ColumnMetadata } from '@/data/column-metadata';
 import {
@@ -12,8 +12,10 @@ import {
   type DictionaryRecord,
   type SummaryStats
 } from '@/lib/upload-parsers';
+import { persistUpload, retrieveUpload, removeUpload } from '@/lib/uploads/storage';
+import type { UploadSlotKey } from '@/lib/uploads/types';
 
-export type UploadSlotKey = 'dataset' | 'dictionary' | 'summary';
+export type { UploadSlotKey } from '@/lib/uploads/types';
 
 type SelectedFiles = Record<UploadSlotKey, string | null>;
 type UploadErrors = Record<UploadSlotKey, string | null>;
@@ -29,12 +31,14 @@ type UploadContextValue = {
   isReady: boolean;
   missing: UploadSlotKey[];
   registerFile: (slot: UploadSlotKey, file: File) => Promise<void>;
+  clearFile: (slot: UploadSlotKey) => Promise<void>;
 };
 
 const UploadContext = createContext<UploadContextValue | undefined>(undefined);
 
 const EMPTY_FILES: SelectedFiles = { dataset: null, dictionary: null, summary: null };
 const EMPTY_ERRORS: UploadErrors = { dataset: null, dictionary: null, summary: null };
+const ALL_SLOTS: UploadSlotKey[] = ['dataset', 'dictionary', 'summary'];
 
 export function UploadProvider({ children }: { children: React.ReactNode }) {
   const [selectedFiles, setSelectedFiles] = useState<SelectedFiles>(EMPTY_FILES);
@@ -43,6 +47,117 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
   const [datasetRows, setDatasetRows] = useState<DatasetRow[] | null>(null);
   const [dictionary, setDictionary] = useState<DictionaryRecord[] | null>(null);
   const [summaryStats, setSummaryStats] = useState<SummaryStats>({});
+
+  const clearSlotData = useCallback((slot: UploadSlotKey) => {
+    setSelectedFiles((prev) => ({ ...prev, [slot]: null }));
+
+    if (slot === 'dataset') {
+      setDatasetColumns(null);
+      setDatasetRows(null);
+    }
+
+    if (slot === 'dictionary') {
+      setDictionary(null);
+    }
+
+    if (slot === 'summary') {
+      setSummaryStats({});
+    }
+  }, []);
+
+  const processUpload = useCallback(
+    async (
+      slot: UploadSlotKey,
+      name: string,
+      text: string,
+      shouldPersist: boolean,
+      mimeType?: string
+    ) => {
+      setErrors((prev) => ({ ...prev, [slot]: null }));
+
+      try {
+        switch (slot) {
+          case 'dataset': {
+            const { headers, rows } = parseDataset(text);
+            if (headers.length === 0) {
+              throw new Error('No columns detected in dataset.');
+            }
+            setDatasetColumns(headers);
+            setDatasetRows(rows);
+            break;
+          }
+          case 'dictionary': {
+            const lowerName = name.toLowerCase();
+            const records = lowerName.endsWith('.json') ? parseDictionaryJson(text) : parseDictionaryCsv(text);
+            if (records.length === 0) {
+              throw new Error('No columns detected in dictionary file.');
+            }
+            setDictionary(records);
+            break;
+          }
+          case 'summary': {
+            const stats = parseSummaryCsv(text);
+            if (Object.keys(stats).length === 0) {
+              throw new Error('No summary statistics found.');
+            }
+            setSummaryStats(stats);
+            break;
+          }
+          default: {
+            throw new Error('Unsupported upload slot.');
+          }
+        }
+
+        setSelectedFiles((prev) => ({ ...prev, [slot]: name }));
+
+        if (shouldPersist) {
+          await persistUpload(slot, {
+            name,
+            content: text,
+            mimeType,
+            updatedAt: Date.now()
+          });
+        }
+      } catch (error) {
+        console.error(error);
+        clearSlotData(slot);
+        const message = error instanceof Error ? error.message : 'Failed to process file.';
+        setErrors((prev) => ({ ...prev, [slot]: message }));
+
+        if (!shouldPersist) {
+          await removeUpload(slot);
+        }
+
+        throw error;
+      }
+    },
+    [clearSlotData]
+  );
+
+  useEffect(() => {
+    let isActive = true;
+
+    const restorePersistedUploads = async () => {
+      for (const slot of ALL_SLOTS) {
+        const stored = await retrieveUpload(slot);
+        if (!isActive || !stored) continue;
+
+        try {
+          await processUpload(slot, stored.name, stored.content, false, stored.mimeType);
+        } catch (error) {
+          if (!isActive) return;
+          console.error('Failed to restore persisted upload', error);
+          setErrors((prev) => ({ ...prev, [slot]: 'Stored file could not be restored. Please upload again.' }));
+        }
+      }
+    };
+
+    void restorePersistedUploads();
+
+    return () => {
+      isActive = false;
+    };
+  }, [processUpload]);
 
   const columnMetadata = useMemo<ColumnMetadata[] | null>(() => {
     if (!dictionary) {
@@ -70,70 +185,30 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
 
   const isReady = missing.length === 0 && (columnMetadata?.length ?? 0) > 0;
 
-  const registerFile = async (slot: UploadSlotKey, file: File) => {
-    setErrors((prev) => ({ ...prev, [slot]: null }));
+  const registerFile = useCallback(
+    async (slot: UploadSlotKey, file: File) => {
+      try {
+        if (slot !== 'dictionary' && !file.name.toLowerCase().endsWith('.csv')) {
+          throw new Error('Only CSV uploads are supported for dataset and summary.');
+        }
 
-    try {
-      const text = await file.text();
+        const text = await file.text();
+        await processUpload(slot, file.name, text, true, file.type || undefined);
+      } catch {
+        // Errors are surfaced via the upload context state.
+      }
+    },
+    [processUpload]
+  );
 
-      switch (slot) {
-        case 'dataset': {
-          if (!file.name.toLowerCase().endsWith('.csv')) {
-            throw new Error('Only CSV datasets are supported at the moment.');
-          }
-          const { headers, rows } = parseDataset(text);
-          if (headers.length === 0) {
-            throw new Error('No columns detected in dataset.');
-          }
-          setDatasetColumns(headers);
-          setDatasetRows(rows);
-          break;
-        }
-        case 'dictionary': {
-          const lowerName = file.name.toLowerCase();
-          const records = lowerName.endsWith('.json')
-            ? parseDictionaryJson(text)
-            : parseDictionaryCsv(text);
-          if (records.length === 0) {
-            throw new Error('No columns detected in dictionary file.');
-          }
-          setDictionary(records);
-          break;
-        }
-        case 'summary': {
-          if (!file.name.toLowerCase().endsWith('.csv')) {
-            throw new Error('Summary upload must be a CSV file.');
-          }
-          const stats = parseSummaryCsv(text);
-          if (Object.keys(stats).length === 0) {
-            throw new Error('No summary statistics found.');
-          }
-          setSummaryStats(stats);
-          break;
-        }
-        default: {
-          throw new Error('Unsupported upload slot.');
-        }
-      }
-
-      setSelectedFiles((prev) => ({ ...prev, [slot]: file.name }));
-    } catch (error) {
-      console.error(error);
-      const message = error instanceof Error ? error.message : 'Failed to process file.';
-      setErrors((prev) => ({ ...prev, [slot]: message }));
-      if (slot === 'dataset') {
-        setDatasetColumns(null);
-        setDatasetRows(null);
-      }
-      if (slot === 'dictionary') {
-        setDictionary(null);
-      }
-      if (slot === 'summary') {
-        setSummaryStats({});
-      }
-      setSelectedFiles((prev) => ({ ...prev, [slot]: null }));
-    }
-  };
+  const clearFile = useCallback(
+    async (slot: UploadSlotKey) => {
+      setErrors((prev) => ({ ...prev, [slot]: null }));
+      clearSlotData(slot);
+      await removeUpload(slot);
+    },
+    [clearSlotData]
+  );
 
   const value: UploadContextValue = {
     columnMetadata,
@@ -145,7 +220,8 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
     errors,
     isReady,
     missing,
-    registerFile
+    registerFile,
+    clearFile
   };
 
   return <UploadContext.Provider value={value}>{children}</UploadContext.Provider>;
