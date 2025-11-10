@@ -1,0 +1,34 @@
+# Database & Auth Setup
+
+1. Copy `.env.example` to `.env` and provide real values:
+   - Generate a secure `NEXTAUTH_SECRET` (`openssl rand -base64 32`).
+   - Provision a Postgres instance (local or hosted) and keep the uncommon port `7543` to avoid clashes.
+   - Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` if Google OAuth will be used; otherwise you can set placeholder values for local dev.
+   - Choose an internal `STAFF_ACCESS_CODE` that teammates must supply when registering accounts.
+
+2. Install dependencies and generate the Drizzle client:
+
+   ```bash
+   pnpm install
+   pnpm db:generate
+   pnpm db:push
+   ```
+
+3. Seed an initial account by hitting `POST /api/auth/register` with JSON `{ "name": "Analyst", "image": "https://...", "staffCode": "<your code>" }` or use the UI in the header once the dev server is running.
+
+4. Start the application:
+
+   ```bash
+   pnpm dev --port 3006
+   ```
+
+   The header menu lets you create/select accounts; uploads require an active session.
+
+5. To inspect the database schema:
+
+   ```bash
+   pnpm db:migrate
+   pnpm db:push
+   ```
+
+   Migrations live under `drizzle/` and the schema is defined in `lib/db/schema.ts`.

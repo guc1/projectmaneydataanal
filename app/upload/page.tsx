@@ -5,9 +5,9 @@ export default function UploadPage() {
     <main className="mx-auto max-w-6xl px-6 py-16">
       <header className="space-y-3 text-center sm:text-left">
         <p className="text-sm uppercase tracking-[0.3em] text-accent">Upload</p>
-        <h1 className="text-3xl font-semibold text-foreground sm:text-4xl">Bring your Polymarket data together</h1>
+        <h1 className="text-3xl font-semibold text-foreground sm:text-4xl">Stream files into the vault</h1>
         <p className="text-base text-muted-foreground">
-          Provide the dataset, dictionary, and summary files to unlock filtering and future analyses.
+          Capture new drops, annotate what changed, and browse every asset ever pushed through the workflow.
         </p>
       </header>
       <UploadPanel />
