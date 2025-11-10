@@ -1,0 +1,308 @@
+'use client';
+
+import { useMemo, useState } from 'react';
+import { Download, Filter, PlusCircle, Trash2 } from 'lucide-react';
+import * as Tooltip from '@radix-ui/react-tooltip';
+
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardDescription, CardTitle } from '@/components/ui/card';
+import { columnMetadata, type ColumnMetadata } from '@/data/column-metadata';
+import { describeOperator, estimateFilteredRows, getAvailableOperators, type FilterDefinition } from '@/lib/filters';
+import { cn } from '@/lib/utils';
+
+type FormState = {
+  column?: ColumnMetadata;
+  operator?: string;
+  valuePrimary: string;
+  valueSecondary: string;
+  error?: string;
+};
+
+const downloadFilters = (filters: FilterDefinition[]) => {
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    totalFilters: filters.length,
+    filters: filters.map(({ id, ...rest }) => rest)
+  };
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = 'filtered-results.json';
+  anchor.click();
+  URL.revokeObjectURL(url);
+};
+
+export function FilterBuilder() {
+  const [form, setForm] = useState<FormState>({ valuePrimary: '', valueSecondary: '' });
+  const [filters, setFilters] = useState<FilterDefinition[]>([]);
+  const [filteredRows, setFilteredRows] = useState<number | null>(null);
+
+  const formatNumber = (value: number) => {
+    if (Math.abs(value) >= 1000) {
+      return value.toLocaleString();
+    }
+    return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  };
+
+  const availableOperators = useMemo(() => {
+    if (!form.column) return [];
+    return getAvailableOperators(form.column.data_type);
+  }, [form.column]);
+
+  const handleSelectColumn = (column: ColumnMetadata) => {
+    const operators = getAvailableOperators(column.data_type);
+    setForm({ column, operator: operators[0], valuePrimary: '', valueSecondary: '' });
+  };
+
+  const handleAddFilter = () => {
+    if (!form.column || !form.operator) {
+      setForm((prev) => ({ ...prev, error: 'Choose a column and operator first.' }));
+      return;
+    }
+
+    const { column, operator, valuePrimary, valueSecondary } = form;
+    const isRange = operator === 'range';
+    const requiresValue = operator === 'contains' || operator === 'equals' ? valuePrimary.trim() : valuePrimary !== '';
+
+    if (!requiresValue || (isRange && valueSecondary === '')) {
+      setForm((prev) => ({ ...prev, error: 'Provide filter values before saving.' }));
+      return;
+    }
+
+    let parsedValue: FilterDefinition['value'] = valuePrimary;
+
+    if (column.data_type !== 'text') {
+      const primaryNumber = Number(valuePrimary);
+      if (Number.isNaN(primaryNumber)) {
+        setForm((prev) => ({ ...prev, error: 'Numeric filters require a valid number.' }));
+        return;
+      }
+
+      if (isRange) {
+        const secondaryNumber = Number(valueSecondary);
+        if (Number.isNaN(secondaryNumber)) {
+          setForm((prev) => ({ ...prev, error: 'Provide a valid upper bound.' }));
+          return;
+        }
+        parsedValue = [primaryNumber, secondaryNumber];
+      } else {
+        parsedValue = primaryNumber;
+      }
+    } else if (operator === 'contains' || operator === 'equals') {
+      parsedValue = valuePrimary.trim();
+    }
+
+    const nextFilter: FilterDefinition = {
+      id: typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `filter-${Date.now()}`,
+      columnKey: column.metric,
+      columnLabel: column.metric,
+      dataType: column.data_type,
+      operator: { type: column.data_type, operator } as FilterDefinition['operator'],
+      value: parsedValue,
+      description: column.what_it_is
+    };
+
+    setFilters((prev) => [...prev, nextFilter]);
+    setForm({ column, operator, valuePrimary: '', valueSecondary: '', error: undefined });
+  };
+
+  const handleRemoveFilter = (id: string) => {
+    setFilters((prev) => prev.filter((filter) => filter.id !== id));
+  };
+
+  const handleFilterDown = () => {
+    setFilteredRows(estimateFilteredRows(filters.length));
+  };
+
+  return (
+    <div className="mt-16 grid gap-10 lg:grid-cols-[1.2fr_1fr]">
+      <section>
+        <Card className="h-full">
+          <CardTitle className="flex items-center gap-2 text-xl">
+            <Filter size={20} /> Build account filters
+          </CardTitle>
+          <CardDescription>
+            Combine as many column rules as needed to narrow the wallet cohort you want to investigate.
+          </CardDescription>
+
+          <div className="mt-8 space-y-8">
+            <div>
+              <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">1. Choose a column</h4>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                {columnMetadata.map((column) => {
+                  const active = form.column?.metric === column.metric;
+                  return (
+                    <Tooltip.Provider key={column.metric} delayDuration={150}>
+                      <Tooltip.Root>
+                        <Tooltip.Trigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => handleSelectColumn(column)}
+                            className={cn(
+                              'w-full rounded-xl border border-white/5 bg-white/5 px-4 py-3 text-left text-sm transition',
+                              active ? 'border-accent bg-accent/10 shadow-glow' : 'hover:border-accent/30 hover:bg-white/10'
+                            )}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="font-medium text-foreground">{column.metric}</span>
+                              <Badge className="bg-transparent text-xs text-muted-foreground">{column.data_type}</Badge>
+                            </div>
+                            <p className="mt-2 h-[3.2rem] overflow-hidden text-xs text-muted-foreground">
+                              {column.what_it_is}
+                            </p>
+                            <div className="mt-3 flex items-center gap-3 text-[11px] text-muted-foreground">
+                              {column.average !== undefined && (
+                                <span>
+                                  avg: <strong className="text-foreground">{formatNumber(column.average)}</strong>
+                                </span>
+                              )}
+                              {column.median !== undefined && (
+                                <span>
+                                  median: <strong className="text-foreground">{formatNumber(column.median)}</strong>
+                                </span>
+                              )}
+                            </div>
+                          </button>
+                        </Tooltip.Trigger>
+                        <Tooltip.Content side="bottom" className="max-w-xs rounded-md bg-muted/95 p-3 text-xs text-foreground shadow-lg">
+                          <p className="font-semibold">{column.metric}</p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">{column.what_it_is}</p>
+                          <div className="mt-2 space-y-1 text-[11px]">
+                            <p>
+                              <span className="font-semibold text-foreground">Data type:</span> {column.data_type}
+                            </p>
+                            <p>
+                              <span className="font-semibold text-foreground">Higher is:</span> {column.higher_is}
+                            </p>
+                            {column.units_or_range && (
+                              <p>
+                                <span className="font-semibold text-foreground">Units / range:</span> {column.units_or_range}
+                              </p>
+                            )}
+                          </div>
+                        </Tooltip.Content>
+                      </Tooltip.Root>
+                    </Tooltip.Provider>
+                  );
+                })}
+              </div>
+            </div>
+
+            {form.column && (
+              <div className="space-y-5">
+                <div>
+                  <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">2. Configure the rule</h4>
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <label className="space-y-2">
+                      <span className="text-xs uppercase tracking-wide text-muted-foreground">Operator</span>
+                      <select
+                        value={form.operator}
+                        onChange={(event) => setForm((prev) => ({ ...prev, operator: event.target.value }))}
+                        className="h-11 w-full rounded-lg border border-white/5 bg-muted/60 px-4 text-sm text-foreground focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/40"
+                      >
+                        {availableOperators.map((operator) => (
+                          <option key={operator} value={operator}>
+                            {describeOperator(operator)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="space-y-2">
+                      <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                        {form.operator === 'range' ? 'Lower bound' : 'Value'}
+                      </span>
+                      <Input
+                        type={form.column.data_type === 'text' ? 'text' : 'number'}
+                        value={form.valuePrimary}
+                        placeholder={form.column.data_type === 'text' ? 'Enter text value' : 'Enter value'}
+                        onChange={(event) => setForm((prev) => ({ ...prev, valuePrimary: event.target.value }))}
+                      />
+                    </label>
+
+                    {form.operator === 'range' && (
+                      <label className="space-y-2">
+                        <span className="text-xs uppercase tracking-wide text-muted-foreground">Upper bound</span>
+                        <Input
+                          type="number"
+                          value={form.valueSecondary}
+                          placeholder="Enter maximum"
+                          onChange={(event) => setForm((prev) => ({ ...prev, valueSecondary: event.target.value }))}
+                        />
+                      </label>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button type="button" onClick={handleAddFilter} className="gap-2">
+                    <PlusCircle size={18} /> Save filter
+                  </Button>
+                  {form.error && <p className="text-sm text-red-400">{form.error}</p>}
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+      </section>
+
+      <aside className="space-y-6">
+        <Card>
+          <CardTitle className="flex items-center gap-2">
+            <Filter size={18} /> Active filters
+          </CardTitle>
+          <CardDescription>Adjust or remove saved filters before applying them to the dataset.</CardDescription>
+
+          <div className="mt-6 space-y-3">
+            {filters.length === 0 && <p className="text-sm text-muted-foreground">No filters saved yet.</p>}
+            {filters.map((filter) => (
+              <div
+                key={filter.id}
+                className="flex items-start justify-between gap-4 rounded-xl border border-white/5 bg-white/5 px-4 py-3"
+              >
+                <div className="space-y-1 text-sm">
+                  <p className="font-semibold text-foreground">
+                    {filter.columnLabel}{' '}
+                    <span className="text-muted-foreground">· {describeOperator(filter.operator.operator)}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">{filter.description}</p>
+                  <Badge className="bg-transparent text-muted-foreground">
+                    Value:{' '}
+                    {Array.isArray(filter.value) ? `${filter.value[0]} → ${filter.value[1]}` : String(filter.value)}
+                  </Badge>
+                </div>
+                <Button variant="muted" size="sm" onClick={() => handleRemoveFilter(filter.id)} className="gap-2">
+                  <Trash2 size={16} /> Remove
+                </Button>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-8 flex flex-wrap items-center gap-3">
+            <Button type="button" variant="outline" className="gap-2" onClick={handleFilterDown} disabled={filters.length === 0}>
+              <Filter size={16} /> Filter down
+            </Button>
+            <Button
+              type="button"
+              className="gap-2"
+              onClick={() => downloadFilters(filters)}
+              disabled={filters.length === 0}
+            >
+              <Download size={16} /> Export filtered
+            </Button>
+          </div>
+
+          <p className="mt-4 text-sm text-muted-foreground">
+            {filteredRows === null
+              ? 'Apply the filters to preview how many accounts remain.'
+              : `Estimated rows remaining: ${filteredRows.toLocaleString()}`}
+          </p>
+        </Card>
+      </aside>
+    </div>
+  );
+}
