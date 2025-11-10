@@ -1,7 +1,7 @@
 'use client';
 
 import { useId } from 'react';
-import { CloudUpload, FileCheck2 } from 'lucide-react';
+import { CloudUpload, FileCheck2, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
@@ -45,13 +45,16 @@ const uploadSlots: UploadSlot[] = [
 
 export function UploadPanel() {
   const controlId = useId();
-  const { selectedFiles, errors, registerFile } = useUploadContext();
+  const { selectedFiles, errors, registerFile, clearFile } = useUploadContext();
 
   const handleFileChange = async (slot: UploadSlotKey, event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    await registerFile(slot, file);
-    event.target.value = '';
+    try {
+      await registerFile(slot, file);
+    } finally {
+      event.target.value = '';
+    }
   };
 
   return (
@@ -61,6 +64,9 @@ export function UploadPanel() {
         <p className="text-base text-muted-foreground">
           Consolidate the core artefacts for the analysis flow. Once uploaded, the platform will validate schemas and pre-compute
           the insights required for fast filtering and comparisons.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Uploads are stored in this browser so you can revisit them until you choose to remove a file.
         </p>
       </div>
 
@@ -90,9 +96,24 @@ export function UploadPanel() {
             </div>
 
             {selectedFiles[slot.key] && (
-              <div className="flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">
-                <FileCheck2 size={16} />
-                <span>{selectedFiles[slot.key]}</span>
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">
+                <div className="flex items-center gap-2">
+                  <FileCheck2 size={16} />
+                  <span className="truncate" title={selectedFiles[slot.key] ?? undefined}>
+                    {selectedFiles[slot.key]}
+                  </span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 border-accent/40 px-2 text-[11px]"
+                  type="button"
+                  onClick={() => {
+                    void clearFile(slot.key);
+                  }}
+                >
+                  <Trash2 size={14} className="mr-1" /> Remove
+                </Button>
               </div>
             )}
             {errors[slot.key] && <p className="text-xs text-red-400">{errors[slot.key]}</p>}
