@@ -2,8 +2,10 @@ import { DrizzleAdapter } from '@auth/drizzle-adapter';
 import { eq } from 'drizzle-orm';
 import NextAuth from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
+import bcrypt from 'bcryptjs';
 
 import { db } from '@/lib/db/client';
+import { ensureAuthSchema } from '@/lib/db/ensure-auth-schema';
 import { users } from '@/lib/db/schema';
 import { env } from './env';
 
@@ -16,15 +18,31 @@ export const authOptions = {
     CredentialsProvider({
       name: 'Workspace account',
       credentials: {
-        userId: { label: 'User ID', type: 'text' }
+        username: { label: 'Username', type: 'text' },
+        password: { label: 'Password', type: 'password' }
       },
       async authorize(credentials) {
-        if (!credentials?.userId) {
+        const username = credentials?.username?.trim().toLowerCase();
+        const password = credentials?.password;
+
+        if (!username || !password) {
           return null;
         }
 
-        const [user] = await db.select().from(users).where(eq(users.id, credentials.userId)).limit(1);
+        await ensureAuthSchema(db);
+
+        const [user] = await db
+          .select()
+          .from(users)
+          .where(eq(users.username, username))
+          .limit(1);
         if (!user) {
+          return null;
+        }
+
+        const isValidPassword = await bcrypt.compare(password, user.passwordHash);
+
+        if (!isValidPassword) {
           return null;
         }
 
@@ -42,6 +60,8 @@ export const authOptions = {
       if (!token?.id) {
         return session;
       }
+
+      await ensureAuthSchema(db);
 
       const [existingUser] = await db
         .select({
