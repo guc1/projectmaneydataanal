@@ -29,6 +29,7 @@ type UploadContextValue = {
   isReady: boolean;
   missing: UploadSlotKey[];
   registerFile: (slot: UploadSlotKey, file: File) => Promise<void>;
+  loadPreset: (preset: Partial<Record<UploadSlotKey, string | null>>) => void;
 };
 
 const UploadContext = createContext<UploadContextValue | undefined>(undefined);
@@ -135,6 +136,14 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const loadPreset = (preset: Partial<Record<UploadSlotKey, string | null>>) => {
+    setSelectedFiles((previous) => ({
+      dataset: preset.dataset ?? previous.dataset,
+      dictionary: preset.dictionary ?? previous.dictionary,
+      summary: preset.summary ?? previous.summary
+    }));
+  };
+
   const value: UploadContextValue = {
     columnMetadata,
     datasetColumns,
@@ -145,7 +154,8 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
     errors,
     isReady,
     missing,
-    registerFile
+    registerFile,
+    loadPreset
   };
 
   return <UploadContext.Provider value={value}>{children}</UploadContext.Provider>;
