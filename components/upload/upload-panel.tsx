@@ -1,7 +1,7 @@
 'use client';
 
 import { useId } from 'react';
-import { CloudUpload, FileCheck2 } from 'lucide-react';
+import { CloudUpload, FileCheck2, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
@@ -45,7 +45,7 @@ const uploadSlots: UploadSlot[] = [
 
 export function UploadPanel() {
   const controlId = useId();
-  const { selectedFiles, errors, registerFile } = useUploadContext();
+  const { selectedFiles, errors, registerFile, clearFile } = useUploadContext();
 
   const handleFileChange = async (slot: UploadSlotKey, event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -90,9 +90,20 @@ export function UploadPanel() {
             </div>
 
             {selectedFiles[slot.key] && (
-              <div className="flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">
-                <FileCheck2 size={16} />
-                <span>{selectedFiles[slot.key]}</span>
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">
+                <span className="flex items-center gap-2">
+                  <FileCheck2 size={16} />
+                  <span>{selectedFiles[slot.key]}</span>
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-accent hover:bg-accent/20"
+                  onClick={() => clearFile(slot.key)}
+                >
+                  <Trash2 size={14} />
+                </Button>
               </div>
             )}
             {errors[slot.key] && <p className="text-xs text-red-400">{errors[slot.key]}</p>}

@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 import type { ColumnMetadata } from '@/data/column-metadata';
 import {
@@ -29,12 +29,16 @@ type UploadContextValue = {
   isReady: boolean;
   missing: UploadSlotKey[];
   registerFile: (slot: UploadSlotKey, file: File) => Promise<void>;
+  loadPreset: (preset: Partial<Record<UploadSlotKey, string | null>>) => void;
+  clearFile: (slot: UploadSlotKey) => void;
 };
 
 const UploadContext = createContext<UploadContextValue | undefined>(undefined);
 
 const EMPTY_FILES: SelectedFiles = { dataset: null, dictionary: null, summary: null };
 const EMPTY_ERRORS: UploadErrors = { dataset: null, dictionary: null, summary: null };
+const COOKIE_KEY = 'uploadSelections';
+const SESSION_STORAGE_KEY = 'uploadState';
 
 export function UploadProvider({ children }: { children: React.ReactNode }) {
   const [selectedFiles, setSelectedFiles] = useState<SelectedFiles>(EMPTY_FILES);
@@ -43,6 +47,7 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
   const [datasetRows, setDatasetRows] = useState<DatasetRow[] | null>(null);
   const [dictionary, setDictionary] = useState<DictionaryRecord[] | null>(null);
   const [summaryStats, setSummaryStats] = useState<SummaryStats>({});
+  const [hydrated, setHydrated] = useState(false);
 
   const columnMetadata = useMemo<ColumnMetadata[] | null>(() => {
     if (!dictionary) {
@@ -116,7 +121,8 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      setSelectedFiles((prev) => ({ ...prev, [slot]: file.name }));
+      const filePath = file.webkitRelativePath && file.webkitRelativePath.length > 0 ? file.webkitRelativePath : file.name;
+      setSelectedFiles((prev) => ({ ...prev, [slot]: filePath }));
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : 'Failed to process file.';
@@ -135,6 +141,98 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const loadPreset = (preset: Partial<Record<UploadSlotKey, string | null>>) => {
+    setSelectedFiles((previous) => ({
+      dataset: preset.dataset ?? previous.dataset,
+      dictionary: preset.dictionary ?? previous.dictionary,
+      summary: preset.summary ?? previous.summary
+    }));
+  };
+
+  const clearFile = (slot: UploadSlotKey) => {
+    setErrors((prev) => ({ ...prev, [slot]: null }));
+    setSelectedFiles((prev) => ({ ...prev, [slot]: null }));
+
+    if (slot === 'dataset') {
+      setDatasetColumns(null);
+      setDatasetRows(null);
+    }
+
+    if (slot === 'dictionary') {
+      setDictionary(null);
+    }
+
+    if (slot === 'summary') {
+      setSummaryStats({});
+    }
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const cookieValue = document.cookie
+      .split('; ')
+      .find((entry) => entry.startsWith(`${COOKIE_KEY}=`))
+      ?.split('=')[1];
+
+    if (cookieValue) {
+      try {
+        const parsed = JSON.parse(decodeURIComponent(cookieValue)) as Partial<SelectedFiles>;
+        setSelectedFiles((prev) => ({
+          dataset: typeof parsed.dataset === 'string' ? parsed.dataset : prev.dataset,
+          dictionary: typeof parsed.dictionary === 'string' ? parsed.dictionary : prev.dictionary,
+          summary: typeof parsed.summary === 'string' ? parsed.summary : prev.summary
+        }));
+      } catch (cookieError) {
+        console.error('Failed to parse upload selections cookie', cookieError);
+      }
+    }
+
+    const stored = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored) as {
+          datasetColumns: string[] | null;
+          datasetRows: DatasetRow[] | null;
+          dictionary: DictionaryRecord[] | null;
+          summaryStats: SummaryStats;
+        };
+
+        if (parsed.datasetColumns) {
+          setDatasetColumns(parsed.datasetColumns);
+        }
+        if (parsed.datasetRows) {
+          setDatasetRows(parsed.datasetRows);
+        }
+        if (parsed.dictionary) {
+          setDictionary(parsed.dictionary);
+        }
+        if (parsed.summaryStats) {
+          setSummaryStats(parsed.summaryStats);
+        }
+      } catch (storageError) {
+        console.error('Failed to parse upload session state', storageError);
+        window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+      }
+    }
+
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !hydrated) {
+      return;
+    }
+
+    const cookiePayload = encodeURIComponent(JSON.stringify(selectedFiles));
+    document.cookie = `${COOKIE_KEY}=${cookiePayload}; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax`;
+
+    const sessionPayload = JSON.stringify({ datasetColumns, datasetRows, dictionary, summaryStats });
+    window.sessionStorage.setItem(SESSION_STORAGE_KEY, sessionPayload);
+  }, [hydrated, selectedFiles, datasetColumns, datasetRows, dictionary, summaryStats]);
+
   const value: UploadContextValue = {
     columnMetadata,
     datasetColumns,
@@ -145,7 +243,9 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
     errors,
     isReady,
     missing,
-    registerFile
+    registerFile,
+    loadPreset,
+    clearFile
   };
 
   return <UploadContext.Provider value={value}>{children}</UploadContext.Provider>;
