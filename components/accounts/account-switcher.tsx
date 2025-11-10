@@ -138,6 +138,23 @@ export function AccountSwitcher() {
     return accounts.find((account) => account.id === session.user?.id) ?? null;
   }, [accounts, session?.user?.id]);
 
+  const activeAccountName = currentAccount?.name ?? session?.user?.name ?? 'Select account';
+  const activeAccountImage = currentAccount?.image ?? session?.user?.image ?? null;
+  const hasActiveAccount = !!(currentAccount || session?.user?.id);
+  const activeInitials = useMemo(() => {
+    if (!hasActiveAccount) {
+      return 'NA';
+    }
+
+    return activeAccountName
+      .split(' ')
+      .map((part) => part.trim().charAt(0))
+      .filter(Boolean)
+      .join('')
+      .slice(0, 2)
+      .toUpperCase();
+  }, [activeAccountName, hasActiveAccount]);
+
   return (
     <div className="relative">
       <Button
@@ -146,8 +163,20 @@ export function AccountSwitcher() {
         onClick={() => setIsOpen((prev) => !prev)}
         className="flex items-center gap-2"
       >
-        <Users className="h-4 w-4" />
-        {currentAccount?.name ?? session?.user?.name ?? 'Select account'}
+        {isLoading ? (
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        ) : activeAccountImage ? (
+          <img src={activeAccountImage} alt={activeAccountName} className="h-6 w-6 rounded-full object-cover" />
+        ) : hasActiveAccount ? (
+          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-[10px] font-semibold uppercase text-foreground/80">
+            {activeInitials}
+          </div>
+        ) : (
+          <Users className="h-4 w-4" />
+        )}
+        <span className="text-sm font-medium text-foreground">
+          {status === 'loading' ? 'Loading…' : activeAccountName}
+        </span>
       </Button>
 
       {isOpen && (
@@ -164,6 +193,7 @@ export function AccountSwitcher() {
           </div>
 
           <div className="mt-3 space-y-2">
+            {error && <p className="text-xs text-red-400">{error}</p>}
             {accounts.length === 0 && <p className="text-xs text-muted-foreground">No accounts yet.</p>}
             {accounts.map((account) => (
               <button
@@ -219,7 +249,6 @@ export function AccountSwitcher() {
               onChange={(event) => setForm((prev) => ({ ...prev, staffCode: event.target.value }))}
               required
             />
-            {error && <p className="text-xs text-red-400">{error}</p>}
             <Button type="submit" className="w-full" disabled={isLoading}>
               {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
               Create & use account
