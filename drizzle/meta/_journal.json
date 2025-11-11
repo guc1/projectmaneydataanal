@@ -8,6 +8,13 @@
       "when": 1731619200000,
       "tag": "0001_upload_selections",
       "breakpoints": false
+    },
+    {
+      "idx": 1,
+      "version": "1",
+      "when": 1731801600000,
+      "tag": "0002_filter_presets",
+      "breakpoints": false
     }
   ]
 }

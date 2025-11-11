@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { UserAvatar } from '@/components/ui/user-avatar';
 import { useUploadContext, type UploadSlotKey } from '@/components/upload/upload-context';
 
 const uploadTargets = [
@@ -44,9 +45,16 @@ interface UploadRecord {
   isSelected: boolean;
 }
 
+interface UploadAuthor {
+  id: string;
+  name: string | null;
+  image: string | null;
+}
+
 type UploadResponse = {
   uploads: UploadRecord[];
   selected?: Record<string, string>;
+  authors?: UploadAuthor[];
 };
 
 type ExistingScope = 'all' | 'button';
@@ -64,7 +72,8 @@ function UploadSelectionList({
   onDelete,
   pendingSelectionId,
   pendingDeletionId,
-  isAuthenticated
+  isAuthenticated,
+  emptyMessage
 }: {
   records: UploadRecord[];
   selectedUploadId: string | null;
@@ -75,9 +84,10 @@ function UploadSelectionList({
   pendingSelectionId: string | null;
   pendingDeletionId: string | null;
   isAuthenticated: boolean;
+  emptyMessage: string;
 }) {
   if (records.length === 0) {
-    return <p className="text-xs text-muted-foreground">No files available in this view yet.</p>;
+    return <p className="text-xs text-muted-foreground">{emptyMessage}</p>;
   }
 
   return (
@@ -114,17 +124,11 @@ function UploadSelectionList({
                 </div>
                 {record.description && <p className="text-xs text-muted-foreground">{record.description}</p>}
                 <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-                  {record.userImage ? (
-                    <img
-                      src={record.userImage}
-                      alt={record.userName ?? 'Uploader'}
-                      className="h-8 w-8 rounded-full object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted/60 text-[11px] font-semibold uppercase">
-                      {(record.userName ?? '?').slice(0, 2)}
-                    </div>
-                  )}
+                  <UserAvatar
+                    image={record.userImage}
+                    name={record.userName ?? 'Workspace analyst'}
+                    size="md"
+                  />
                   <div>
                     <p>{record.userName ?? 'Workspace analyst'}</p>
                     <p className="text-[10px]">{formatDate(record.uploadedAt)}</p>
@@ -189,16 +193,18 @@ function UploadCard({
   target,
   records,
   allRecords,
+  authors,
   selectedUploadId,
   onRefresh
 }: {
   target: (typeof uploadTargets)[number];
   records: UploadRecord[];
   allRecords: UploadRecord[];
+  authors: UploadAuthor[];
   selectedUploadId: string | null;
   onRefresh: () => Promise<void> | void;
 }) {
-  const { status } = useSession();
+  const { status, data: session } = useSession();
   const [mode, setMode] = useState<'idle' | 'upload'>('idle');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [scope, setScope] = useState<ExistingScope>('button');
@@ -209,9 +215,37 @@ function UploadCard({
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [pendingSelectionId, setPendingSelectionId] = useState<string | null>(null);
   const [pendingDeletionId, setPendingDeletionId] = useState<string | null>(null);
+  const [selectedAuthor, setSelectedAuthor] = useState<string>('all');
   const isAuthenticated = status === 'authenticated';
 
-  const visibleRecords = useMemo(() => (scope === 'all' ? allRecords : records), [scope, allRecords, records]);
+  const currentUserId = session?.user?.id ?? null;
+
+  const scopedRecords = useMemo(() => (scope === 'all' ? allRecords : records), [scope, allRecords, records]);
+
+  const availableAuthorOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const present = new Set(scopedRecords.map((record) => record.userId));
+    return authors.filter((author) => {
+      if (!present.has(author.id) || seen.has(author.id)) {
+        return false;
+      }
+      seen.add(author.id);
+      return true;
+    });
+  }, [authors, scopedRecords]);
+
+  const visibleRecords = useMemo(() => {
+    if (selectedAuthor === 'all') {
+      return scopedRecords;
+    }
+    if (selectedAuthor === 'mine') {
+      if (!currentUserId) {
+        return [];
+      }
+      return scopedRecords.filter((record) => record.userId === currentUserId);
+    }
+    return scopedRecords.filter((record) => record.userId === selectedAuthor);
+  }, [scopedRecords, selectedAuthor, currentUserId]);
 
   const selectedRecord = useMemo(() => {
     if (!selectedUploadId) {
@@ -224,8 +258,41 @@ function UploadCard({
     if (!isDialogOpen) {
       setScope('button');
       setSelectionError(null);
+      setSelectedAuthor('all');
     }
   }, [isDialogOpen]);
+
+  useEffect(() => {
+    if (!currentUserId && selectedAuthor === 'mine') {
+      setSelectedAuthor('all');
+    }
+  }, [currentUserId, selectedAuthor]);
+
+  useEffect(() => {
+    if (selectedAuthor !== 'all' && selectedAuthor !== 'mine') {
+      const exists = availableAuthorOptions.some((author) => author.id === selectedAuthor);
+      if (!exists) {
+        setSelectedAuthor('all');
+      }
+    }
+  }, [availableAuthorOptions, selectedAuthor]);
+
+  const selectedAuthorLabel = useMemo(() => {
+    if (selectedAuthor === 'all' || selectedAuthor === 'mine') {
+      return null;
+    }
+    return availableAuthorOptions.find((author) => author.id === selectedAuthor)?.name ?? null;
+  }, [selectedAuthor, availableAuthorOptions]);
+
+  const emptyMessage = useMemo(() => {
+    if (selectedAuthor === 'all') {
+      return 'No files available in this view yet.';
+    }
+    if (selectedAuthor === 'mine') {
+      return 'You haven’t uploaded files that match this view yet.';
+    }
+    return `No files from ${selectedAuthorLabel ?? 'this analyst'} in this view yet.`;
+  }, [selectedAuthor, selectedAuthorLabel]);
 
   const handleUpload = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -495,6 +562,25 @@ function UploadCard({
                 </Button>
               </div>
 
+              <div className="mt-3 text-xs">
+                <label className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Analyst
+                </label>
+                <select
+                  value={selectedAuthor}
+                  onChange={(event) => setSelectedAuthor(event.target.value)}
+                  className="mt-1 h-9 w-full rounded-lg border border-border/60 bg-background/60 px-3 text-sm text-foreground focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/40"
+                >
+                  <option value="all">All analysts</option>
+                  {currentUserId && <option value="mine">My uploads</option>}
+                  {availableAuthorOptions.map((author) => (
+                    <option key={author.id} value={author.id}>
+                      {author.name ?? 'Workspace analyst'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="mt-4 max-h-[420px] overflow-y-auto pr-2">
                 {selectionError && <p className="mb-3 text-xs text-red-400">{selectionError}</p>}
                 <UploadSelectionList
@@ -507,6 +593,7 @@ function UploadCard({
                   pendingSelectionId={pendingSelectionId}
                   pendingDeletionId={pendingDeletionId}
                   isAuthenticated={isAuthenticated}
+                  emptyMessage={emptyMessage}
                 />
               </div>
             </Dialog.Content>
@@ -524,6 +611,7 @@ export function UploadPanel() {
   const { ingestUpload, clearFile } = useUploadContext();
   const [allUploads, setAllUploads] = useState<UploadRecord[]>([]);
   const [uploadsByTarget, setUploadsByTarget] = useState<Record<string, UploadRecord[]>>({});
+  const [authors, setAuthors] = useState<UploadAuthor[]>([]);
   const [selectedUploads, setSelectedUploads] = useState<Record<UploadSlotKey, string | null>>({
     dataset: null,
     dictionary: null,
@@ -541,31 +629,21 @@ export function UploadPanel() {
     setIsLoading(true);
     setError(null);
     try {
-      const [allResponse, perTarget] = await Promise.all([
-        fetch('/api/uploads?scope=all'),
-        Promise.all(
-          uploadTargets.map(async (target) => {
-            const response = await fetch(`/api/uploads?scope=button&buttonKey=${target.key}`);
-            if (!response.ok) {
-              throw new Error('Failed to load uploads');
-            }
-            return [target.key, (await response.json()) as UploadResponse] as const;
-          })
-        )
-      ]);
-
-      if (!allResponse.ok) {
+      const response = await fetch('/api/uploads?scope=all');
+      if (!response.ok) {
         throw new Error('Failed to load uploads');
       }
 
-      const allPayload = (await allResponse.json()) as UploadResponse;
-      setAllUploads(allPayload.uploads);
+      const payload = (await response.json()) as UploadResponse;
+      const uploads = payload.uploads ?? [];
+      setAllUploads(uploads);
+      setAuthors(payload.authors ?? []);
 
-      const mapped: Record<string, UploadRecord[]> = {};
-      for (const [key, payload] of perTarget) {
-        mapped[key] = payload.uploads ?? [];
+      const grouped: Record<string, UploadRecord[]> = {};
+      for (const target of uploadTargets) {
+        grouped[target.key] = uploads.filter((upload) => upload.buttonKey === target.key);
       }
-      setUploadsByTarget(mapped);
+      setUploadsByTarget(grouped);
 
       const selectionMap: Record<UploadSlotKey, string | null> = {
         dataset: null,
@@ -574,7 +652,7 @@ export function UploadPanel() {
       };
       for (const target of uploadTargets) {
         const slot = target.key as UploadSlotKey;
-        selectionMap[slot] = allPayload.selected?.[target.key] ?? null;
+        selectionMap[slot] = payload.selected?.[target.key] ?? null;
       }
       setSelectedUploads(selectionMap);
     } catch (err) {
@@ -683,6 +761,7 @@ export function UploadPanel() {
             target={target}
             records={uploadsByTarget[target.key] ?? []}
             allRecords={allUploads}
+            authors={authors}
             selectedUploadId={selectedUploads[target.key] ?? null}
             onRefresh={fetchUploads}
           />

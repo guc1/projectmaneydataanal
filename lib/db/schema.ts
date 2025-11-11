@@ -4,6 +4,7 @@ import {
   index,
   integer,
   interval,
+  jsonb,
   numeric,
   pgEnum,
   pgTable,
@@ -312,12 +313,52 @@ export const uploadSelections = pgTable(
   })
 );
 
+export const filterPresets = pgTable(
+  'filter_presets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    template: jsonb('template').notNull(),
+    createdByUserId: uuid('created_by_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { mode: 'date', withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => ({
+    filterPresetsUserIdx: index('filter_presets_user_idx').on(table.createdByUserId),
+    filterPresetsCreatedIdx: index('filter_presets_created_idx').on(table.createdAt)
+  })
+);
+
+export const filterPresetChains = pgTable(
+  'filter_preset_chains',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    templates: jsonb('templates').notNull(),
+    createdByUserId: uuid('created_by_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { mode: 'date', withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => ({
+    filterPresetChainsUserIdx: index('filter_preset_chains_user_idx').on(table.createdByUserId),
+    filterPresetChainsCreatedIdx: index('filter_preset_chains_created_idx').on(table.createdAt)
+  })
+);
+
 export const usersRelations = relations(users, ({ many }) => ({
   accounts: many(accounts),
   sessions: many(sessions),
   uploads: many(uploadEntries),
   uploadSelections: many(uploadSelections),
-  bookings: many(meetingBookings)
+  bookings: many(meetingBookings),
+  filterPresets: many(filterPresets),
+  filterPresetChains: many(filterPresetChains)
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
@@ -368,6 +409,20 @@ export const uploadSelectionsRelations = relations(uploadSelections, ({ one }) =
   }),
   user: one(users, {
     fields: [uploadSelections.userId],
+    references: [users.id]
+  })
+}));
+
+export const filterPresetsRelations = relations(filterPresets, ({ one }) => ({
+  author: one(users, {
+    fields: [filterPresets.createdByUserId],
+    references: [users.id]
+  })
+}));
+
+export const filterPresetChainsRelations = relations(filterPresetChains, ({ one }) => ({
+  author: one(users, {
+    fields: [filterPresetChains.createdByUserId],
     references: [users.id]
   })
 }));
