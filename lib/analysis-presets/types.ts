@@ -2,7 +2,53 @@ import type { ColumnDataType } from '@/data/column-metadata';
 
 export type AnalysisOperator = '+' | '-' | '*' | '/';
 
-export type AnalysisMethodId = 'bell-curve-distance' | 'conditional-flag';
+export type AnalysisMethodId =
+  | 'bell-curve-distance'
+  | 'conditional-flag'
+  | 'one-sided-distance'
+  | 'zero-to-one-scaling'
+  | 'distribution-density'
+  | 'significance-flag';
+
+export type OneSidedBaselineMode = 'average' | 'median' | 'custom';
+export type OneSidedSide = 'left' | 'right';
+export type ScalingCurve = 'linear' | 'quadratic' | 'exponential' | 'logarithmic';
+
+export type OneSidedConfig = {
+  kind: 'one-sided';
+  baselineMode: OneSidedBaselineMode;
+  baselineValue: number;
+  side: OneSidedSide;
+  scaling: ScalingCurve;
+  slope: number;
+};
+
+export type ZeroToOneScaling = 'linear' | 'exponential' | 'logarithmic';
+
+export type ZeroToOneConfig = {
+  kind: 'zero-to-one';
+  scaling: ZeroToOneScaling;
+  slope: number;
+};
+
+export type DistributionScaling = 'linear' | 'exponential' | 'logarithmic';
+export type DistributionRewardMode = 'least' | 'most';
+
+export type DistributionConfig = {
+  kind: 'distribution';
+  buckets: number;
+  scaling: DistributionScaling;
+  slope: number;
+  reward: DistributionRewardMode;
+};
+
+export type SignificanceConfig = {
+  kind: 'significance';
+  significanceLevel: number;
+  mode: 'one-sided' | 'two-sided';
+  tail: 'lower' | 'upper';
+  flagSignificant: boolean;
+};
 
 export type ConditionalFlagConfig =
   | {
@@ -32,7 +78,12 @@ export type ConditionalFlagConfig =
       max: number;
     };
 
-export type AnalysisStepConfig = ConditionalFlagConfig;
+export type AnalysisStepConfig =
+  | ConditionalFlagConfig
+  | OneSidedConfig
+  | ZeroToOneConfig
+  | DistributionConfig
+  | SignificanceConfig;
 
 export const DEFAULT_ANALYSIS_WEIGHT = 1;
 
