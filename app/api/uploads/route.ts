@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { and, desc, eq } from 'drizzle-orm';
+import { SQL, and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -93,6 +93,7 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const scope = url.searchParams.get('scope') ?? 'all';
   const buttonKey = url.searchParams.get('buttonKey');
+  const authorFilter = url.searchParams.get('userId');
 
   const baseQuery = db
     .select({
@@ -109,12 +110,21 @@ export async function GET(request: Request) {
     .from(uploadEntries)
     .innerJoin(users, eq(uploadEntries.uploadedByUserId, users.id));
 
-  let rows;
+  let whereClause: SQL<unknown> | undefined;
 
   if (scope === 'button' && buttonKey) {
-    rows = await baseQuery
-      .where(eq(uploadEntries.buttonKey, buttonKey))
-      .orderBy(desc(uploadEntries.uploadedAt));
+    whereClause = eq(uploadEntries.buttonKey, buttonKey);
+  }
+
+  if (authorFilter && authorFilter !== 'all') {
+    const userClause = eq(uploadEntries.uploadedByUserId, authorFilter);
+    whereClause = whereClause ? and(whereClause, userClause) : userClause;
+  }
+
+  let rows;
+
+  if (whereClause) {
+    rows = await baseQuery.where(whereClause).orderBy(desc(uploadEntries.uploadedAt));
   } else {
     rows = await baseQuery.orderBy(desc(uploadEntries.uploadedAt));
   }
@@ -140,7 +150,29 @@ export async function GET(request: Request) {
 
   const selected = Object.fromEntries(selectionMap);
 
-  return NextResponse.json({ uploads, selected });
+  const authorMap = new Map<string, { id: string; name: string | null; image: string | null }>();
+  for (const row of rows) {
+    if (!authorMap.has(row.userId)) {
+      authorMap.set(row.userId, {
+        id: row.userId,
+        name: row.userName,
+        image: row.userImage
+      });
+    }
+  }
+
+  const authors = Array.from(authorMap.values()).sort((a, b) => {
+    const aName = a.name?.toLowerCase() ?? '';
+    const bName = b.name?.toLowerCase() ?? '';
+    if (aName && bName) {
+      return aName.localeCompare(bName);
+    }
+    if (aName) return -1;
+    if (bName) return 1;
+    return 0;
+  });
+
+  return NextResponse.json({ uploads, selected, authors });
 }
 
 export async function PATCH(request: Request) {

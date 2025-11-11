@@ -1,18 +1,26 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Download, Filter, Plus, Trash2 } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
+import { useSession } from 'next-auth/react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
+import { UserAvatar } from '@/components/ui/user-avatar';
 import type { ColumnMetadata } from '@/data/column-metadata';
 import { useUploadContext } from '@/components/upload/upload-context';
 import { applyFilters, describeOperator, getAvailableOperators, type FilterDefinition } from '@/lib/filters';
 import type { DatasetRow } from '@/lib/upload-parsers';
 import { cn } from '@/lib/utils';
+import type {
+  FilterTemplatePayload,
+  PresetAuthor,
+  SavedPresetChainRecord,
+  SavedPresetRecord
+} from '@/lib/filter-presets/types';
 
 const EMPTY_COLUMNS: ColumnMetadata[] = [];
 
@@ -180,19 +188,11 @@ const CATEGORY_GROUPS = [
   }
 ] as const;
 
-type FilterTemplate = Omit<FilterDefinition, 'id'>;
+type FilterTemplate = FilterTemplatePayload;
 
-type SavedPreset = {
-  id: string;
-  name: string;
-  template: FilterTemplate;
-};
+type SavedPreset = SavedPresetRecord;
 
-type SavedChain = {
-  id: string;
-  name: string;
-  templates: FilterTemplate[];
-};
+type SavedChain = SavedPresetChainRecord;
 
 type FormState = {
   column?: ColumnMetadata;
@@ -228,6 +228,7 @@ const downloadFilteredCsv = (rows: DatasetRow[], columns: string[]) => {
 
 export function FilterBuilder() {
   const { columnMetadata, datasetColumns, datasetRows, isReady, missing } = useUploadContext();
+  const { data: session } = useSession();
   const [form, setForm] = useState<FormState>({ valuePrimary: '', valueSecondary: '' });
   const [filters, setFilters] = useState<FilterDefinition[]>([]);
   const [filterResult, setFilterResult] = useState<DatasetRow[] | null>(null);
@@ -237,8 +238,14 @@ export function FilterBuilder() {
   const [isBrowsingMetrics, setIsBrowsingMetrics] = useState(true);
   const [savedPresets, setSavedPresets] = useState<SavedPreset[]>([]);
   const [savedChains, setSavedChains] = useState<SavedChain[]>([]);
+  const [authorFilter, setAuthorFilter] = useState<string>('all');
+  const [isSyncingLibrary, setIsSyncingLibrary] = useState(false);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [isSavingPreset, setIsSavingPreset] = useState(false);
+  const [isSavingChain, setIsSavingChain] = useState(false);
 
   const availableColumns = columnMetadata ?? EMPTY_COLUMNS;
+  const currentUserId = session?.user?.id ?? null;
 
   const generateId = () =>
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -249,6 +256,58 @@ export function FilterBuilder() {
     ...template,
     id: generateId()
   });
+
+  useEffect(() => {
+    let isActive = true;
+
+    const fetchLibrary = async () => {
+      setIsSyncingLibrary(true);
+      setLibraryError(null);
+      try {
+        const response = await fetch('/api/filter-presets');
+        if (!response.ok) {
+          let message = 'Unable to load saved presets.';
+          try {
+            const data = await response.json();
+            if (data && typeof data.error === 'string') {
+              message = data.error;
+            }
+          } catch {
+            // ignore JSON parse errors
+          }
+          throw new Error(message);
+        }
+
+        const payload = (await response.json()) as {
+          presets?: SavedPresetRecord[];
+          chains?: SavedPresetChainRecord[];
+        };
+
+        if (!isActive) {
+          return;
+        }
+
+        setSavedPresets(payload.presets ?? []);
+        setSavedChains(payload.chains ?? []);
+      } catch (error) {
+        console.error(error);
+        if (!isActive) {
+          return;
+        }
+        setLibraryError(error instanceof Error ? error.message : 'Unable to load saved presets.');
+      } finally {
+        if (isActive) {
+          setIsSyncingLibrary(false);
+        }
+      }
+    };
+
+    void fetchLibrary();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   useEffect(() => {
     setForm((previous) => {
@@ -313,6 +372,64 @@ export function FilterBuilder() {
       .filter((column): column is ColumnMetadata => Boolean(column));
   }, [availableColumns, selectedCategoryGroup]);
 
+  const availableAuthors = useMemo(() => {
+    const map = new Map<string, PresetAuthor>();
+    savedPresets.forEach((preset) => {
+      map.set(preset.createdBy.id, preset.createdBy);
+    });
+    savedChains.forEach((chain) => {
+      map.set(chain.createdBy.id, chain.createdBy);
+    });
+    return Array.from(map.values()).sort((a, b) => {
+      const aName = a.name?.toLowerCase() ?? '';
+      const bName = b.name?.toLowerCase() ?? '';
+      if (aName && bName) {
+        return aName.localeCompare(bName);
+      }
+      if (aName) return -1;
+      if (bName) return 1;
+      return 0;
+    });
+  }, [savedPresets, savedChains]);
+
+  useEffect(() => {
+    if (!currentUserId && authorFilter === 'mine') {
+      setAuthorFilter('all');
+    }
+  }, [currentUserId, authorFilter]);
+
+  useEffect(() => {
+    if (authorFilter !== 'all' && authorFilter !== 'mine') {
+      const exists = availableAuthors.some((author) => author.id === authorFilter);
+      if (!exists) {
+        setAuthorFilter('all');
+      }
+    }
+  }, [availableAuthors, authorFilter]);
+
+  const matchesAuthor = useCallback(
+    (authorId: string) => {
+      if (authorFilter === 'all') {
+        return true;
+      }
+      if (authorFilter === 'mine') {
+        return currentUserId ? authorId === currentUserId : false;
+      }
+      return authorFilter === authorId;
+    },
+    [authorFilter, currentUserId]
+  );
+
+  const filteredPresets = useMemo(
+    () => savedPresets.filter((preset) => matchesAuthor(preset.createdBy.id)),
+    [savedPresets, matchesAuthor]
+  );
+
+  const filteredChains = useMemo(
+    () => savedChains.filter((chain) => matchesAuthor(chain.createdBy.id)),
+    [savedChains, matchesAuthor]
+  );
+
   const createTemplateFromForm = (): FilterTemplate | null => {
     if (!form.column || !form.operator) {
       setForm((prev) => ({ ...prev, error: 'Choose a column and operator first.' }));
@@ -362,6 +479,31 @@ export function FilterBuilder() {
 
     return template;
   };
+
+  const extractErrorMessage = async (response: Response, fallback: string) => {
+    try {
+      const data = await response.json();
+      if (data && typeof data.error === 'string') {
+        return data.error;
+      }
+      if (data && typeof data.error === 'object') {
+        const candidates = Object.values(data.error as Record<string, unknown>);
+        for (const candidate of candidates) {
+          if (Array.isArray(candidate)) {
+            const first = candidate.find((entry) => typeof entry === 'string');
+            if (first) {
+              return first;
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore parsing failures
+    }
+    return fallback;
+  };
+
+  const formatPresetDate = (value: string) => new Date(value).toLocaleString();
 
   if (!isReady) {
     return (
@@ -430,9 +572,14 @@ export function FilterBuilder() {
     setSelectedCategory(group ? group.id : null);
   };
 
-  const handleSavePreset = () => {
+  const handleSavePreset = async () => {
     const template = createTemplateFromForm();
     if (!template) {
+      return;
+    }
+
+    if (!session?.user?.id) {
+      setFilterError('Sign in before saving presets.');
       return;
     }
 
@@ -449,8 +596,34 @@ export function FilterBuilder() {
       }
     }
 
-    setSavedPresets((prev) => [...prev, { id: generateId(), name, template }]);
-    setForm((prev) => ({ ...prev, error: undefined }));
+    setIsSavingPreset(true);
+    setLibraryError(null);
+    setFilterError(null);
+
+    try {
+      const response = await fetch('/api/filter-presets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'single', name, template })
+      });
+
+      if (!response.ok) {
+        const message = await extractErrorMessage(response, 'Unable to save preset.');
+        throw new Error(message);
+      }
+
+      const payload = (await response.json()) as { preset: SavedPresetRecord };
+      setSavedPresets((prev) => [payload.preset, ...prev]);
+      setForm((prev) => ({ ...prev, error: undefined }));
+      if (currentUserId) {
+        setAuthorFilter((prev) => (prev === 'all' ? 'mine' : prev));
+      }
+    } catch (error) {
+      console.error(error);
+      setLibraryError(error instanceof Error ? error.message : 'Unable to save preset.');
+    } finally {
+      setIsSavingPreset(false);
+    }
   };
 
   const handleLoadSinglePreset = (preset: SavedPreset) => {
@@ -460,9 +633,14 @@ export function FilterBuilder() {
     setFormFromTemplate(preset.template);
   };
 
-  const handleSaveChain = () => {
+  const handleSaveChain = async () => {
     if (filters.length === 0) {
       setFilterError('Add at least one filter before saving a preset chain.');
+      return;
+    }
+
+    if (!session?.user?.id) {
+      setFilterError('Sign in before saving preset chains.');
       return;
     }
 
@@ -480,8 +658,33 @@ export function FilterBuilder() {
     }
 
     const templates = filters.map(({ id: _id, ...rest }) => rest);
-    setSavedChains((prev) => [...prev, { id: generateId(), name, templates }]);
+    setIsSavingChain(true);
+    setLibraryError(null);
     setFilterError(null);
+
+    try {
+      const response = await fetch('/api/filter-presets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'chain', name, templates })
+      });
+
+      if (!response.ok) {
+        const message = await extractErrorMessage(response, 'Unable to save preset chain.');
+        throw new Error(message);
+      }
+
+      const payload = (await response.json()) as { chain: SavedPresetChainRecord };
+      setSavedChains((prev) => [payload.chain, ...prev]);
+      if (currentUserId) {
+        setAuthorFilter((prev) => (prev === 'all' ? 'mine' : prev));
+      }
+    } catch (error) {
+      console.error(error);
+      setLibraryError(error instanceof Error ? error.message : 'Unable to save preset chain.');
+    } finally {
+      setIsSavingChain(false);
+    }
   };
 
   const handleLoadPresetChain = (chain: SavedChain) => {
@@ -845,21 +1048,49 @@ export function FilterBuilder() {
 
             {activePanel === 'single' && (
               <div className="rounded-2xl border border-white/10 bg-background/80 p-6 shadow-inner">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold text-foreground">Saved presets</p>
-                  {savedPresets.length > 0 && (
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                      {savedPresets.length} total
-                    </span>
-                  )}
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-foreground">Saved presets</p>
+                    {filteredPresets.length > 0 && (
+                      <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                        {filteredPresets.length} {filteredPresets.length === 1 ? 'match' : 'matches'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="w-full sm:w-60">
+                    <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Analyst
+                    </label>
+                    <select
+                      value={authorFilter}
+                      onChange={(event) => setAuthorFilter(event.target.value)}
+                      className="mt-1 h-9 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-foreground focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/40"
+                    >
+                      <option value="all">All analysts</option>
+                      {currentUserId && <option value="mine">My presets</option>}
+                      {availableAuthors.map((author) => (
+                        <option key={author.id} value={author.id}>
+                          {author.name ?? 'Workspace analyst'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
+                {libraryError && <p className="mt-3 text-xs text-red-400">{libraryError}</p>}
+                {isSyncingLibrary && (
+                  <p className="mt-3 text-xs text-muted-foreground">Loading library…</p>
+                )}
                 <div className="mt-4 space-y-3">
-                  {savedPresets.length === 0 ? (
+                  {filteredPresets.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
-                      Save a rule to reuse it later on any dataset with the same column.
+                      {authorFilter === 'all'
+                        ? 'Save a rule to reuse it later on any dataset with the same column.'
+                        : authorFilter === 'mine'
+                          ? 'You haven’t saved presets for this dataset yet.'
+                          : 'No presets from this analyst are compatible with the current dataset yet.'}
                     </p>
                   ) : (
-                    savedPresets.map((preset) => (
+                    filteredPresets.map((preset) => (
                       <button
                         key={preset.id}
                         type="button"
@@ -870,6 +1101,16 @@ export function FilterBuilder() {
                         <p className="text-xs text-muted-foreground">
                           {preset.template.columnLabel} · {describeOperator(preset.template.operator.operator)}
                         </p>
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                          <UserAvatar
+                            image={preset.createdBy.image}
+                            name={preset.createdBy.name ?? 'Workspace analyst'}
+                            size="sm"
+                          />
+                          <span>{preset.createdBy.name ?? 'Workspace analyst'}</span>
+                          <span className="hidden text-muted-foreground/70 sm:inline">•</span>
+                          <span className="text-muted-foreground/80">{formatPresetDate(preset.createdAt)}</span>
+                        </div>
                       </button>
                     ))
                   )}
@@ -879,21 +1120,49 @@ export function FilterBuilder() {
 
             {activePanel === 'chain' && (
               <div className="rounded-2xl border border-white/10 bg-background/80 p-6 shadow-inner">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold text-foreground">Saved preset chains</p>
-                  {savedChains.length > 0 && (
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                      {savedChains.length} total
-                    </span>
-                  )}
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-foreground">Saved preset chains</p>
+                    {filteredChains.length > 0 && (
+                      <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                        {filteredChains.length} {filteredChains.length === 1 ? 'match' : 'matches'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="w-full sm:w-60">
+                    <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Analyst
+                    </label>
+                    <select
+                      value={authorFilter}
+                      onChange={(event) => setAuthorFilter(event.target.value)}
+                      className="mt-1 h-9 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-foreground focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/40"
+                    >
+                      <option value="all">All analysts</option>
+                      {currentUserId && <option value="mine">My presets</option>}
+                      {availableAuthors.map((author) => (
+                        <option key={author.id} value={author.id}>
+                          {author.name ?? 'Workspace analyst'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
+                {libraryError && <p className="mt-3 text-xs text-red-400">{libraryError}</p>}
+                {isSyncingLibrary && (
+                  <p className="mt-3 text-xs text-muted-foreground">Loading library…</p>
+                )}
                 <div className="mt-4 space-y-3">
-                  {savedChains.length === 0 ? (
+                  {filteredChains.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
-                      Save a flow to build libraries of multi-step filters.
+                      {authorFilter === 'all'
+                        ? 'Save a flow to build libraries of multi-step filters.'
+                        : authorFilter === 'mine'
+                          ? 'You haven’t saved preset chains for this dataset yet.'
+                          : 'No preset chains from this analyst are compatible with the current dataset yet.'}
                     </p>
                   ) : (
-                    savedChains.map((chain) => (
+                    filteredChains.map((chain) => (
                       <button
                         key={chain.id}
                         type="button"
@@ -902,6 +1171,16 @@ export function FilterBuilder() {
                       >
                         <p className="text-sm font-semibold text-foreground">{chain.name}</p>
                         <p className="text-xs text-muted-foreground">{chain.templates.length} filters</p>
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                          <UserAvatar
+                            image={chain.createdBy.image}
+                            name={chain.createdBy.name ?? 'Workspace analyst'}
+                            size="sm"
+                          />
+                          <span>{chain.createdBy.name ?? 'Workspace analyst'}</span>
+                          <span className="hidden text-muted-foreground/70 sm:inline">•</span>
+                          <span className="text-muted-foreground/80">{formatPresetDate(chain.createdAt)}</span>
+                        </div>
                       </button>
                     ))
                   )}
@@ -972,10 +1251,11 @@ export function FilterBuilder() {
                     <Button
                       type="button"
                       variant="muted"
-                      onClick={handleSavePreset}
+                      onClick={() => void handleSavePreset()}
                       className="gap-2 rounded-full border border-white/10 bg-white/10 px-6"
+                      disabled={isSavingPreset}
                     >
-                      <Plus size={16} /> Save preset
+                      <Plus size={16} /> {isSavingPreset ? 'Saving…' : 'Save preset'}
                     </Button>
                     <Button type="button" onClick={handleAddToFlow} className="gap-2 rounded-full px-6">
                       <Filter size={16} /> Add to flow
@@ -997,11 +1277,11 @@ export function FilterBuilder() {
                   type="button"
                   variant="muted"
                   size="sm"
-                  disabled={filters.length === 0}
-                  onClick={handleSaveChain}
+                  disabled={filters.length === 0 || isSavingChain}
+                  onClick={() => void handleSaveChain()}
                   className="gap-2 rounded-full border border-white/10 bg-white/10 px-4"
                 >
-                  Save chain
+                  {isSavingChain ? 'Saving…' : 'Save chain'}
                 </Button>
               </div>
               <div className="mt-6 space-y-4">
