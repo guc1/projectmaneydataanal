@@ -2,13 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { auth } from '@/lib/auth';
 import { db } from '@/lib/db/client';
-import { uploadEntries, users } from '@/lib/db/schema';
+import { uploadEntries, uploadSelections, users } from '@/lib/db/schema';
 
 const uploadSchema = z.object({
   buttonKey: z.string().min(1, 'Upload target is required'),
@@ -16,6 +16,12 @@ const uploadSchema = z.object({
 });
 
 const uploadsRoot = path.join(process.cwd(), 'data', 'uploads');
+
+const selectionSchema = z.object({
+  buttonKey: z.string().min(1, 'Upload target is required'),
+  uploadId: z.string().uuid().optional(),
+  select: z.boolean()
+});
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -63,10 +69,27 @@ export async function POST(request: Request) {
     })
     .returning();
 
-  return NextResponse.json({ upload: record }, { status: 201 });
+  await db
+    .insert(uploadSelections)
+    .values({
+      buttonKey: parsed.data.buttonKey,
+      uploadId: record.id,
+      userId: session.user.id
+    })
+    .onConflictDoUpdate({
+      target: [uploadSelections.userId, uploadSelections.buttonKey],
+      set: {
+        uploadId: record.id,
+        selectedAt: new Date()
+      }
+    });
+
+  return NextResponse.json({ upload: record, selectedUploadId: record.id }, { status: 201 });
 }
 
 export async function GET(request: Request) {
+  const session = await auth();
+  const userId = session?.user?.id ?? null;
   const url = new URL(request.url);
   const scope = url.searchParams.get('scope') ?? 'all';
   const buttonKey = url.searchParams.get('buttonKey');
@@ -96,5 +119,89 @@ export async function GET(request: Request) {
     rows = await baseQuery.orderBy(desc(uploadEntries.uploadedAt));
   }
 
-  return NextResponse.json({ uploads: rows });
+  let selectionRows: { buttonKey: string; uploadId: string }[] = [];
+
+  if (userId) {
+    selectionRows = await db
+      .select({ buttonKey: uploadSelections.buttonKey, uploadId: uploadSelections.uploadId })
+      .from(uploadSelections)
+      .where(eq(uploadSelections.userId, userId));
+  }
+
+  const selectionMap = new Map<string, string>();
+  for (const selection of selectionRows) {
+    selectionMap.set(selection.buttonKey, selection.uploadId);
+  }
+
+  const uploads = rows.map((row) => ({
+    ...row,
+    isSelected: selectionMap.get(row.buttonKey) === row.id
+  }));
+
+  const selected = Object.fromEntries(selectionMap);
+
+  return NextResponse.json({ uploads, selected });
+}
+
+export async function PATCH(request: Request) {
+  const session = await auth();
+
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
+  }
+
+  let payload: unknown;
+
+  try {
+    payload = await request.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid request body.' }, { status: 400 });
+  }
+
+  const parsed = selectionSchema.safeParse(payload);
+
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+  }
+
+  const { buttonKey, uploadId, select } = parsed.data;
+
+  if (select) {
+    if (!uploadId) {
+      return NextResponse.json({ error: 'Upload ID is required to select a file.' }, { status: 400 });
+    }
+
+    const [target] = await db
+      .select({ id: uploadEntries.id })
+      .from(uploadEntries)
+      .where(and(eq(uploadEntries.id, uploadId), eq(uploadEntries.buttonKey, buttonKey)))
+      .limit(1);
+
+    if (!target) {
+      return NextResponse.json({ error: 'Upload not found for this slot.' }, { status: 404 });
+    }
+
+    await db
+      .insert(uploadSelections)
+      .values({
+        buttonKey,
+        uploadId: target.id,
+        userId: session.user.id
+      })
+      .onConflictDoUpdate({
+        target: [uploadSelections.userId, uploadSelections.buttonKey],
+        set: {
+          uploadId: target.id,
+          selectedAt: new Date()
+        }
+      });
+
+    return NextResponse.json({ selectedUploadId: target.id });
+  }
+
+  await db
+    .delete(uploadSelections)
+    .where(and(eq(uploadSelections.userId, session.user.id), eq(uploadSelections.buttonKey, buttonKey)));
+
+  return NextResponse.json({ selectedUploadId: null });
 }
