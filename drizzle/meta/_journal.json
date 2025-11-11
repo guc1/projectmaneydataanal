@@ -1,0 +1,13 @@
+{
+  "version": "5",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "1",
+      "when": 1731619200000,
+      "tag": "0001_upload_selections",
+      "breakpoints": false
+    }
+  ]
+}
