@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Download, Filter, PlusCircle, Trash2 } from 'lucide-react';
+import { Download, Filter, Plus, Trash2 } from 'lucide-react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 
 import { Button } from '@/components/ui/button';
@@ -15,6 +15,184 @@ import type { DatasetRow } from '@/lib/upload-parsers';
 import { cn } from '@/lib/utils';
 
 const EMPTY_COLUMNS: ColumnMetadata[] = [];
+
+const CATEGORY_GROUPS = [
+  {
+    id: 'other',
+    label: 'Other',
+    metrics: [
+      'rank',
+      'proxyWallet',
+      'userName',
+      'xUsername',
+      'verifiedBadge',
+      'vol',
+      'pnl',
+      'profileImage',
+      'total_volume',
+      'position_to_volume_ratio',
+      'gaintovolume_pct',
+      'losstovolume_pct',
+      'nettotaltovolume_pct',
+      'gaintoloss'
+    ]
+  },
+  {
+    id: 'delta',
+    label: 'Delta',
+    metrics: [
+      'mean_delta_1d',
+      'mean_delta_1w',
+      'mean_delta_1m',
+      'mean_delta_all',
+      'smoothness_1d',
+      'smoothness_1w',
+      'smoothness_1m',
+      'smoothness_all',
+      'plus_delta_pct_1d',
+      'plus_delta_pct_1w',
+      'plus_delta_pct_1m',
+      'plus_delta_pct_all',
+      'min_delta_pct_1d',
+      'min_delta_pct_1w',
+      'min_delta_pct_1m',
+      'min_delta_pct_all',
+      'gain_1d',
+      'gain_1w',
+      'gain_1m',
+      'gain_all',
+      'loss_1d',
+      'loss_1w',
+      'loss_1m',
+      'loss_all',
+      'net_total_1d',
+      'net_total_1w',
+      'net_total_1m',
+      'net_total_all'
+    ]
+  },
+  {
+    id: 'open',
+    label: 'Open',
+    metrics: [
+      'OPEN_trades',
+      'OPEN_largestWin',
+      'OPEN_views',
+      'OPEN_joinDate',
+      'OPEN_pos_count',
+      'OPEN_win_loss_ratio',
+      'OPEN_avg_percentPnl_win',
+      'OPEN_avg_percentPnl_loss',
+      'OPEN_portfolio_nrr_all',
+      'OPEN_pnl_std_all',
+      'OPEN_risk_adjusted_score_all',
+      'OPEN_avg_shares_win',
+      'OPEN_avg_shares_loss',
+      'OPEN_avg_avgPrice_win',
+      'OPEN_median_avgPrice_win',
+      'OPEN_avg_curPrice_win',
+      'OPEN_median_curPrice_win',
+      'OPEN_avg_avgPrice_loss',
+      'OPEN_median_avgPrice_loss',
+      'OPEN_avg_curPrice_loss',
+      'OPEN_median_curPrice_loss',
+      'OPEN_yes_no_ratio',
+      'OPEN_eventId_spread_pct'
+    ]
+  },
+  {
+    id: 'closed',
+    label: 'Closed',
+    metrics: [
+      'CLOSED_win_loss_ratio',
+      'CLOSED_avg_percentPnl_win',
+      'CLOSED_avg_percentPnl_loss',
+      'CLOSED_portfolio_nrr_all',
+      'CLOSED_pnl_std_all',
+      'CLOSED_risk_adjusted_score_all',
+      'CLOSED_avg_shares_win',
+      'CLOSED_avg_shares_loss',
+      'CLOSED_avg_realizedPnl_win',
+      'CLOSED_median_realizedPnl_win',
+      'CLOSED_avg_realizedPnl_loss',
+      'CLOSED_median_realizedPnl_loss',
+      'CLOSED_avg_avgPrice_win',
+      'CLOSED_median_avgPrice_win',
+      'CLOSED_avg_avgPrice_loss',
+      'CLOSED_median_avgPrice_loss',
+      'CLOSED_yes_no_ratio',
+      'CLOSED_eventSlug_spread_pct',
+      'CLOSED_arbitrage_pct',
+      'CLOSED_zero_ratio',
+      'CLOSED_<2%_wins_ratio',
+      'CLOSED_2%to6%_wins_ratio',
+      'CLOSED_6%to10%_wins_ratio',
+      'CLOSED_10%to20%_wins_ratio',
+      'CLOSED_20%to40%_wins_ratio',
+      'CLOSED_40%to80%_wins_ratio',
+      'CLOSED_80%to90%_wins_ratio',
+      'CLOSED_90%to100%_wins_ratio'
+    ]
+  },
+  {
+    id: 'activity',
+    label: 'Activity',
+    metrics: [
+      'ACTIVITY_tradecount',
+      'ACTIVITY_avgintbettrades_min',
+      'ACTIVITY_day_coverage_avg_pct',
+      'ACTIVITY_day_coverage_max_pct',
+      'ACTIVITY_concentration_score_avg',
+      'ACTIVITY_avg_size_buy',
+      'ACTIVITY_median_size_buy',
+      'ACTIVITY_avg_size_sell',
+      'ACTIVITY_median_size_sell',
+      'ACTIVITY_avg_usdc_buy',
+      'ACTIVITY_median_usdc_buy',
+      'ACTIVITY_avg_usdc_sell',
+      'ACTIVITY_median_usdc_sell',
+      'ACTIVITY_avg_price_trade',
+      'ACTIVITY_priceextremes_pct',
+      'ACTIVITY_arbitrage_count',
+      'ACTIVITY_arbitrage_trade_share_pct',
+      'ACTIVITY_arbitrage_usd_earned_total',
+      'ACTIVITY_quick_0_1s_pct',
+      'ACTIVITY_quick_1_5s_pct',
+      'ACTIVITY_quick_5_20s_pct',
+      'ACTIVITY_quick_20_60s_pct',
+      'ACTIVITY_quick_60_600s_pct',
+      'ACTIVITY_quick_600_3600s_pct',
+      'ACTIVITY_quick_3600_86400s_pct',
+      'ACTIVITY_quick_ge_86400s_pct',
+      'ACTIVITY_quick_profit_0_5s_usd',
+      'ACTIVITY_quick_profit_5_20s_usd',
+      'ACTIVITY_fillup_pct_of_trades',
+      'ACTIVITY_fillup_usd_earned_total',
+      'ACTIVITY_buy_gt_95_pct_of_trades',
+      'ACTIVITY_merge_pct_all_types',
+      'ACTIVITY_split_pct_all_types',
+      'ACTIVITY_buy_sell_ratio',
+      'ACTIVITY_rewards_usd_total',
+      'ACTIVITY_rewards_share_of_approx_netprofit_pct',
+      'ACTIVITY_mm_opposite_round_trip_5s_pct',
+      'ACTIVITY_mm_simultaneous_dual_side_5s_pct'
+    ]
+  }
+] as const;
+
+type FilterTemplate = Omit<FilterDefinition, 'id'>;
+
+type SavedPreset = {
+  id: string;
+  name: string;
+  template: FilterTemplate;
+};
+
+type SavedChain = {
+  id: string;
+  name: string;
+  templates: FilterTemplate[];
+};
 
 type FormState = {
   column?: ColumnMetadata;
@@ -54,8 +232,22 @@ export function FilterBuilder() {
   const [filters, setFilters] = useState<FilterDefinition[]>([]);
   const [filterResult, setFilterResult] = useState<DatasetRow[] | null>(null);
   const [filterError, setFilterError] = useState<string | null>(null);
+  const [activePanel, setActivePanel] = useState<'category' | 'single' | 'chain' | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [savedPresets, setSavedPresets] = useState<SavedPreset[]>([]);
+  const [savedChains, setSavedChains] = useState<SavedChain[]>([]);
 
   const availableColumns = columnMetadata ?? EMPTY_COLUMNS;
+
+  const generateId = () =>
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `filter-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+  const instantiateFilter = (template: FilterTemplate): FilterDefinition => ({
+    ...template,
+    id: generateId()
+  });
 
   useEffect(() => {
     setForm((previous) => {
@@ -71,6 +263,19 @@ export function FilterBuilder() {
 
     setFilters((previous) =>
       previous.filter((filter) => availableColumns.some((column) => column.metric === filter.columnKey))
+    );
+    setSavedPresets((previous) =>
+      previous.filter((preset) => availableColumns.some((column) => column.metric === preset.template.columnKey))
+    );
+    setSavedChains((previous) =>
+      previous
+        .map((chain) => ({
+          ...chain,
+          templates: chain.templates.filter((template) =>
+            availableColumns.some((column) => column.metric === template.columnKey)
+          )
+        }))
+        .filter((chain) => chain.templates.length > 0)
     );
     setFilterResult(null);
     setFilterError(null);
@@ -92,6 +297,70 @@ export function FilterBuilder() {
     if (!form.column) return [];
     return getAvailableOperators(form.column.data_type);
   }, [form.column]);
+
+  const selectedCategoryGroup = useMemo(
+    () => CATEGORY_GROUPS.find((group) => group.id === selectedCategory) ?? null,
+    [selectedCategory]
+  );
+
+  const categoryColumns = useMemo(() => {
+    if (!selectedCategoryGroup) {
+      return [] as ColumnMetadata[];
+    }
+    return selectedCategoryGroup.metrics
+      .map((metric) => availableColumns.find((column) => column.metric === metric))
+      .filter((column): column is ColumnMetadata => Boolean(column));
+  }, [availableColumns, selectedCategoryGroup]);
+
+  const createTemplateFromForm = (): FilterTemplate | null => {
+    if (!form.column || !form.operator) {
+      setForm((prev) => ({ ...prev, error: 'Choose a column and operator first.' }));
+      return null;
+    }
+
+    const { column, operator, valuePrimary, valueSecondary } = form;
+    const isRange = operator === 'range';
+    const requiresValue = operator === 'contains' || operator === 'equals' ? valuePrimary.trim() : valuePrimary !== '';
+
+    if (!requiresValue || (isRange && valueSecondary === '')) {
+      setForm((prev) => ({ ...prev, error: 'Provide filter values before continuing.' }));
+      return null;
+    }
+
+    let parsedValue: FilterDefinition['value'] = valuePrimary;
+
+    if (column.data_type !== 'text') {
+      const primaryNumber = Number(valuePrimary);
+      if (Number.isNaN(primaryNumber)) {
+        setForm((prev) => ({ ...prev, error: 'Numeric filters require a valid number.' }));
+        return null;
+      }
+
+      if (isRange) {
+        const secondaryNumber = Number(valueSecondary);
+        if (Number.isNaN(secondaryNumber)) {
+          setForm((prev) => ({ ...prev, error: 'Provide a valid upper bound.' }));
+          return null;
+        }
+        parsedValue = [Math.min(primaryNumber, secondaryNumber), Math.max(primaryNumber, secondaryNumber)];
+      } else {
+        parsedValue = primaryNumber;
+      }
+    } else if (operator === 'contains' || operator === 'equals') {
+      parsedValue = valuePrimary.trim();
+    }
+
+    const template: FilterTemplate = {
+      columnKey: column.metric,
+      columnLabel: column.metric,
+      dataType: column.data_type,
+      operator: { type: column.data_type, operator } as FilterDefinition['operator'],
+      value: parsedValue,
+      description: column.what_it_is
+    };
+
+    return template;
+  };
 
   if (!isReady) {
     return (
@@ -116,68 +385,131 @@ export function FilterBuilder() {
 
   const handleSelectColumn = (column: ColumnMetadata) => {
     const operators = getAvailableOperators(column.data_type);
-    setForm({ column, operator: operators[0], valuePrimary: '', valueSecondary: '' });
+    setForm({ column, operator: operators[0], valuePrimary: '', valueSecondary: '', error: undefined });
+    setFilterError(null);
+    setActivePanel('category');
+    const group = CATEGORY_GROUPS.find((category) => category.metrics.includes(column.metric));
+    setSelectedCategory(group ? group.id : null);
+  };
+
+  const handleAddToFlow = () => {
+    const template = createTemplateFromForm();
+    if (!template) {
+      return;
+    }
+
+    setFilters((prev) => [...prev, instantiateFilter(template)]);
+    setFilterResult(null);
+    setFilterError(null);
+    setForm((prev) => ({ ...prev, valuePrimary: '', valueSecondary: '', error: undefined }));
+    setActivePanel(null);
+  };
+
+  const setFormFromTemplate = (template: FilterTemplate) => {
+    const column = availableColumns.find((item) => item.metric === template.columnKey);
+    if (!column) {
+      setForm({ valuePrimary: '', valueSecondary: '', error: 'Column not available in current dataset.' });
+      return;
+    }
+
+    const operator = template.operator.operator;
+    let valuePrimary = '';
+    let valueSecondary = '';
+
+    if (Array.isArray(template.value)) {
+      valuePrimary = String(template.value[0] ?? '');
+      valueSecondary = String(template.value[1] ?? '');
+    } else {
+      valuePrimary = String(template.value ?? '');
+    }
+
+    setForm({ column, operator, valuePrimary, valueSecondary, error: undefined });
+    const group = CATEGORY_GROUPS.find((category) => category.metrics.includes(column.metric));
+    setSelectedCategory(group ? group.id : null);
+  };
+
+  const handleSavePreset = () => {
+    const template = createTemplateFromForm();
+    if (!template) {
+      return;
+    }
+
+    const defaultName = `${template.columnLabel} · ${describeOperator(template.operator.operator)}`;
+    let name = defaultName;
+    if (typeof window !== 'undefined') {
+      const response = window.prompt('Name this preset', defaultName);
+      if (!response) {
+        return;
+      }
+      name = response.trim();
+      if (!name) {
+        return;
+      }
+    }
+
+    setSavedPresets((prev) => [...prev, { id: generateId(), name, template }]);
+    setForm((prev) => ({ ...prev, error: undefined }));
+  };
+
+  const handleLoadSinglePreset = (preset: SavedPreset) => {
+    setFilterError(null);
+    setFilterResult(null);
+    setActivePanel(null);
+    setFormFromTemplate(preset.template);
+  };
+
+  const handleSaveChain = () => {
+    if (filters.length === 0) {
+      setFilterError('Add at least one filter before saving a preset chain.');
+      return;
+    }
+
+    const defaultName = `Chain · ${filters.length} filter${filters.length === 1 ? '' : 's'}`;
+    let name = defaultName;
+    if (typeof window !== 'undefined') {
+      const response = window.prompt('Name this preset chain', defaultName);
+      if (!response) {
+        return;
+      }
+      name = response.trim();
+      if (!name) {
+        return;
+      }
+    }
+
+    const templates = filters.map(({ id: _id, ...rest }) => rest);
+    setSavedChains((prev) => [...prev, { id: generateId(), name, templates }]);
     setFilterError(null);
   };
 
-  const handleAddFilter = () => {
-    if (!form.column || !form.operator) {
-      setForm((prev) => ({ ...prev, error: 'Choose a column and operator first.' }));
-      return;
-    }
-
-    const { column, operator, valuePrimary, valueSecondary } = form;
-    const isRange = operator === 'range';
-    const requiresValue = operator === 'contains' || operator === 'equals' ? valuePrimary.trim() : valuePrimary !== '';
-
-    if (!requiresValue || (isRange && valueSecondary === '')) {
-      setForm((prev) => ({ ...prev, error: 'Provide filter values before saving.' }));
-      return;
-    }
-
-    let parsedValue: FilterDefinition['value'] = valuePrimary;
-
-    if (column.data_type !== 'text') {
-      const primaryNumber = Number(valuePrimary);
-      if (Number.isNaN(primaryNumber)) {
-        setForm((prev) => ({ ...prev, error: 'Numeric filters require a valid number.' }));
-        return;
-      }
-
-      if (isRange) {
-        const secondaryNumber = Number(valueSecondary);
-        if (Number.isNaN(secondaryNumber)) {
-          setForm((prev) => ({ ...prev, error: 'Provide a valid upper bound.' }));
-          return;
-        }
-        parsedValue = [Math.min(primaryNumber, secondaryNumber), Math.max(primaryNumber, secondaryNumber)];
-      } else {
-        parsedValue = primaryNumber;
-      }
-    } else if (operator === 'contains' || operator === 'equals') {
-      parsedValue = valuePrimary.trim();
-    }
-
-    const nextFilter: FilterDefinition = {
-      id: typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `filter-${Date.now()}`,
-      columnKey: column.metric,
-      columnLabel: column.metric,
-      dataType: column.data_type,
-      operator: { type: column.data_type, operator } as FilterDefinition['operator'],
-      value: parsedValue,
-      description: column.what_it_is
-    };
-
-    setFilters((prev) => [...prev, nextFilter]);
-    setFilterResult(null);
+  const handleLoadPresetChain = (chain: SavedChain) => {
+    setFilters(chain.templates.map((template) => instantiateFilter(template)));
     setFilterError(null);
-    setForm({ column, operator, valuePrimary: '', valueSecondary: '', error: undefined });
+    setFilterResult(null);
+    setActivePanel(null);
+    if (chain.templates.length > 0) {
+      setFormFromTemplate(chain.templates[chain.templates.length - 1]);
+    }
+  };
+
+  const handleOpenPanel = (panel: 'category' | 'single' | 'chain') => {
+    setActivePanel((previous) => {
+      const next = previous === panel ? null : panel;
+      if (next === 'category') {
+        setSelectedCategory((current) => current ?? CATEGORY_GROUPS[0]?.id ?? null);
+      }
+      return next;
+    });
+    if (panel === 'category') {
+      setFilterError(null);
+    }
   };
 
   const handleRemoveFilter = (id: string) => {
     setFilters((prev) => prev.filter((filter) => filter.id !== id));
     setFilterResult(null);
     setFilterError(null);
+    setActivePanel(null);
   };
 
   const handleFilterDown = () => {
@@ -194,6 +526,7 @@ export function FilterBuilder() {
     const result = applyFilters(datasetRows, filters);
     setFilterResult(result);
     setFilterError(null);
+    setActivePanel(null);
   };
 
   const handleExportFiltered = () => {
@@ -207,90 +540,250 @@ export function FilterBuilder() {
   const totalRows = datasetRows?.length ?? 0;
 
   return (
-    <div className="mt-16 grid gap-10 lg:grid-cols-[1.2fr_1fr]">
+    <div className="mt-16 grid gap-10 xl:grid-cols-[1.35fr_1fr]">
       <section>
         <Card className="h-full">
-          <CardTitle className="flex items-center gap-2 text-xl">
-            <Filter size={20} /> Build account filters
-          </CardTitle>
-          <CardDescription>
-            Combine as many column rules as needed to narrow the wallet cohort you want to investigate.
-          </CardDescription>
-
-          <div className="mt-8 space-y-8">
+          <div className="space-y-8">
             <div>
-              <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">1. Choose a column</h4>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                {availableColumns.map((column) => {
-                  const active = form.column?.metric === column.metric;
-                  return (
-                    <Tooltip.Provider key={column.metric} delayDuration={150}>
-                      <Tooltip.Root>
-                        <Tooltip.Trigger asChild>
-                          <button
-                            type="button"
-                            onClick={() => handleSelectColumn(column)}
-                            className={cn(
-                              'w-full rounded-xl border border-white/5 bg-white/5 px-4 py-3 text-left text-sm transition',
-                              active ? 'border-accent bg-accent/10 shadow-glow' : 'hover:border-accent/30 hover:bg-white/10'
-                            )}
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="font-medium text-foreground">{column.metric}</span>
-                              <Badge className="bg-transparent text-xs text-muted-foreground">{column.data_type}</Badge>
-                            </div>
-                            <p className="mt-2 h-[3.2rem] overflow-hidden text-xs text-muted-foreground">
-                              {column.what_it_is}
-                            </p>
-                            <div className="mt-3 flex items-center gap-3 text-[11px] text-muted-foreground">
-                              {column.average !== undefined && (
-                                <span>
-                                  avg: <strong className="text-foreground">{formatNumber(column.average)}</strong>
-                                </span>
-                              )}
-                              {column.median !== undefined && (
-                                <span>
-                                  median: <strong className="text-foreground">{formatNumber(column.median)}</strong>
-                                </span>
-                              )}
-                            </div>
-                          </button>
-                        </Tooltip.Trigger>
-                        <Tooltip.Content side="bottom" className="max-w-xs rounded-md bg-muted/95 p-3 text-xs text-foreground shadow-lg">
-                          <p className="font-semibold">{column.metric}</p>
-                          <p className="mt-1 text-[11px] text-muted-foreground">{column.what_it_is}</p>
-                          <div className="mt-2 space-y-1 text-[11px]">
-                            <p>
-                              <span className="font-semibold text-foreground">Data type:</span> {column.data_type}
-                            </p>
-                            <p>
-                              <span className="font-semibold text-foreground">Higher is:</span> {column.higher_is}
-                            </p>
-                            {column.units_or_range && (
-                              <p>
-                                <span className="font-semibold text-foreground">Units / range:</span> {column.units_or_range}
-                              </p>
-                            )}
-                          </div>
-                        </Tooltip.Content>
-                      </Tooltip.Root>
-                    </Tooltip.Provider>
-                  );
-                })}
-              </div>
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Filter size={20} /> Build account filters
+              </CardTitle>
+              <CardDescription>
+                Visualise and orchestrate multi-step filters to surface the wallets that matter most.
+              </CardDescription>
             </div>
 
-            {form.column && (
-              <div className="space-y-5">
-                <div>
-                  <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">2. Configure the rule</h4>
-                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => handleOpenPanel('category')}
+                className={cn(
+                  'group flex items-center gap-3 rounded-full border border-orange-400/60 bg-orange-500/10 px-4 py-2 text-sm font-semibold text-orange-100 transition hover:border-orange-400 hover:bg-orange-500/20',
+                  activePanel === 'category' && 'border-orange-300 bg-orange-500/30 text-white'
+                )}
+              >
+                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-orange-500 text-white shadow-lg shadow-orange-500/40">
+                  <Plus size={18} />
+                </span>
+                <span className="text-xs font-semibold uppercase tracking-[0.35em]">Add</span>
+              </button>
+              <Button
+                type="button"
+                variant="muted"
+                onClick={() => handleOpenPanel('single')}
+                className={cn(
+                  'rounded-full border border-white/10 bg-white/10 px-5 text-sm font-semibold text-foreground backdrop-blur-sm hover:border-accent/40 hover:bg-accent/10',
+                  activePanel === 'single' && 'border-accent/60 bg-accent/20 text-accent shadow-glow'
+                )}
+              >
+                Load single preset
+              </Button>
+              <Button
+                type="button"
+                variant="muted"
+                onClick={() => handleOpenPanel('chain')}
+                className={cn(
+                  'rounded-full border border-white/10 bg-white/10 px-5 text-sm font-semibold text-foreground backdrop-blur-sm hover:border-accent/40 hover:bg-accent/10',
+                  activePanel === 'chain' && 'border-accent/60 bg-accent/20 text-accent shadow-glow'
+                )}
+              >
+                Load preset chain
+              </Button>
+            </div>
+
+            {activePanel === 'category' && (
+              <div className="rounded-2xl border border-white/10 bg-background/80 p-6 shadow-inner">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Categories</p>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  {CATEGORY_GROUPS.map((group) => {
+                    const availableCount = group.metrics.filter((metric) =>
+                      availableColumns.some((column) => column.metric === metric)
+                    ).length;
+                    const isActive = selectedCategory === group.id;
+                    const hasColumns = availableCount > 0;
+                    return (
+                      <button
+                        key={group.id}
+                        type="button"
+                        onClick={() => hasColumns && setSelectedCategory(group.id)}
+                        disabled={!hasColumns}
+                        className={cn(
+                          'min-w-[140px] rounded-xl border border-white/5 bg-white/5 px-4 py-3 text-left text-sm transition hover:border-accent/40 hover:bg-white/10',
+                          isActive && 'border-accent/60 bg-accent/15 text-foreground shadow-glow',
+                          !hasColumns && 'cursor-not-allowed opacity-50 hover:border-white/5 hover:bg-white/5'
+                        )}
+                      >
+                        <span className="block font-semibold text-foreground">{group.label}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {hasColumns ? `${availableCount} metrics` : 'Unavailable'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {selectedCategoryGroup && (
+                  <div className="mt-6">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      {selectedCategoryGroup.label} metrics
+                    </p>
+                    <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                      {categoryColumns.length === 0 && (
+                        <p className="col-span-full rounded-2xl border border-dashed border-white/10 bg-white/5 px-5 py-12 text-center text-sm text-muted-foreground">
+                          No uploaded columns match this category yet.
+                        </p>
+                      )}
+                      {categoryColumns.map((column) => {
+                        const active = form.column?.metric === column.metric;
+                        return (
+                          <Tooltip.Provider key={column.metric} delayDuration={150}>
+                            <Tooltip.Root>
+                              <Tooltip.Trigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSelectColumn(column)}
+                                  className={cn(
+                                    'h-full w-full rounded-2xl border border-white/5 bg-white/5 p-4 text-left text-sm transition hover:border-accent/40 hover:bg-white/10',
+                                    active && 'border-accent/60 bg-accent/20 shadow-glow'
+                                  )}
+                                >
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="font-semibold text-foreground">{column.metric}</span>
+                                    <Badge className="border-white/20 bg-transparent text-xs text-muted-foreground">
+                                      {column.data_type}
+                                    </Badge>
+                                  </div>
+                                  <p className="mt-2 h-[3.3rem] overflow-hidden text-xs text-muted-foreground">
+                                    {column.what_it_is}
+                                  </p>
+                                  <div className="mt-3 flex items-center gap-3 text-[11px] text-muted-foreground">
+                                    {column.average !== undefined && (
+                                      <span>
+                                        avg: <strong className="text-foreground">{formatNumber(column.average)}</strong>
+                                      </span>
+                                    )}
+                                    {column.median !== undefined && (
+                                      <span>
+                                        median: <strong className="text-foreground">{formatNumber(column.median)}</strong>
+                                      </span>
+                                    )}
+                                  </div>
+                                </button>
+                              </Tooltip.Trigger>
+                              <Tooltip.Content
+                                side="bottom"
+                                className="max-w-xs rounded-md bg-muted/95 p-3 text-xs text-foreground shadow-lg"
+                              >
+                                <p className="font-semibold">{column.metric}</p>
+                                <p className="mt-1 text-[11px] text-muted-foreground">{column.what_it_is}</p>
+                                <div className="mt-2 space-y-1 text-[11px]">
+                                  <p>
+                                    <span className="font-semibold text-foreground">Data type:</span> {column.data_type}
+                                  </p>
+                                  <p>
+                                    <span className="font-semibold text-foreground">Higher is:</span> {column.higher_is}
+                                  </p>
+                                  {column.units_or_range && (
+                                    <p>
+                                      <span className="font-semibold text-foreground">Units / range:</span> {column.units_or_range}
+                                    </p>
+                                  )}
+                                </div>
+                              </Tooltip.Content>
+                            </Tooltip.Root>
+                          </Tooltip.Provider>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activePanel === 'single' && (
+              <div className="rounded-2xl border border-white/10 bg-background/80 p-6 shadow-inner">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold text-foreground">Saved presets</p>
+                  {savedPresets.length > 0 && (
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                      {savedPresets.length} total
+                    </span>
+                  )}
+                </div>
+                <div className="mt-4 space-y-3">
+                  {savedPresets.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Save a rule to reuse it later on any dataset with the same column.
+                    </p>
+                  ) : (
+                    savedPresets.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => handleLoadSinglePreset(preset)}
+                        className="w-full rounded-xl border border-white/5 bg-white/5 px-4 py-3 text-left transition hover:border-accent/40 hover:bg-white/10"
+                      >
+                        <p className="text-sm font-semibold text-foreground">{preset.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {preset.template.columnLabel} · {describeOperator(preset.template.operator.operator)}
+                        </p>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activePanel === 'chain' && (
+              <div className="rounded-2xl border border-white/10 bg-background/80 p-6 shadow-inner">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold text-foreground">Saved preset chains</p>
+                  {savedChains.length > 0 && (
+                    <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                      {savedChains.length} total
+                    </span>
+                  )}
+                </div>
+                <div className="mt-4 space-y-3">
+                  {savedChains.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Save a flow to build libraries of multi-step filters.
+                    </p>
+                  ) : (
+                    savedChains.map((chain) => (
+                      <button
+                        key={chain.id}
+                        type="button"
+                        onClick={() => handleLoadPresetChain(chain)}
+                        className="w-full rounded-xl border border-white/5 bg-white/5 px-4 py-3 text-left transition hover:border-accent/40 hover:bg-white/10"
+                      >
+                        <p className="text-sm font-semibold text-foreground">{chain.name}</p>
+                        <p className="text-xs text-muted-foreground">{chain.templates.length} filters</p>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="rounded-2xl border border-white/10 bg-background/70 p-6">
+              <div className="flex items-center justify-between gap-3">
+                <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">2. Configure the rule</h4>
+                {form.column && (
+                  <Badge className="border-white/20 bg-accent/20 text-xs text-accent">
+                    {form.column.metric}
+                  </Badge>
+                )}
+              </div>
+              {form.column ? (
+                <div className="mt-6 space-y-5">
+                  <div className="grid gap-4 md:grid-cols-2">
                     <label className="space-y-2">
                       <span className="text-xs uppercase tracking-wide text-muted-foreground">Operator</span>
                       <select
                         value={form.operator}
                         onChange={(event) => setForm((prev) => ({ ...prev, operator: event.target.value }))}
-                        className="h-11 w-full rounded-lg border border-white/5 bg-muted/60 px-4 text-sm text-foreground focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/40"
+                        className="h-11 w-full rounded-lg border border-white/10 bg-muted/60 px-4 text-sm text-foreground focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/40"
                       >
                         {availableOperators.map((operator) => (
                           <option key={operator} value={operator}>
@@ -324,80 +817,161 @@ export function FilterBuilder() {
                       </label>
                     )}
                   </div>
-                </div>
 
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button type="button" onClick={handleAddFilter} className="gap-2">
-                    <PlusCircle size={18} /> Save filter
-                  </Button>
-                  {form.error && <p className="text-sm text-red-400">{form.error}</p>}
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Button
+                      type="button"
+                      variant="muted"
+                      onClick={handleSavePreset}
+                      className="gap-2 rounded-full border border-white/10 bg-white/10 px-6"
+                    >
+                      <Plus size={16} /> Save preset
+                    </Button>
+                    <Button type="button" onClick={handleAddToFlow} className="gap-2 rounded-full px-6">
+                      <Filter size={16} /> Add to flow
+                    </Button>
+                    {form.error && <p className="text-sm text-red-400">{form.error}</p>}
+                  </div>
                 </div>
+              ) : (
+                <p className="mt-6 text-sm text-muted-foreground">
+                  Choose a metric from the categories to configure your first rule.
+                </p>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-background/70 p-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">3. Filter flow</h4>
+                <Button
+                  type="button"
+                  variant="muted"
+                  size="sm"
+                  disabled={filters.length === 0}
+                  onClick={handleSaveChain}
+                  className="gap-2 rounded-full border border-white/10 bg-white/10 px-4"
+                >
+                  Save chain
+                </Button>
               </div>
-            )}
+              <div className="mt-6 space-y-4">
+                {filters.length === 0 && (
+                  <p className="rounded-2xl border border-dashed border-white/10 bg-white/5 px-6 py-12 text-center text-sm text-muted-foreground">
+                    Your flow is empty. Add a filter to start crafting a preset chain.
+                  </p>
+                )}
+                {filters.map((filter, index) => (
+                  <div key={filter.id} className="relative">
+                    {index > 0 && <div className="absolute left-5 top-[-1.5rem] h-6 w-px bg-accent/40" />}
+                    <div className="rounded-2xl border border-white/10 bg-white/5 p-4 backdrop-blur-sm">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="text-sm font-semibold text-foreground">{filter.columnLabel}</p>
+                          <p className="text-xs text-muted-foreground">{filter.description}</p>
+                        </div>
+                        <Badge className="border-white/20 bg-transparent text-xs text-muted-foreground">
+                          {describeOperator(filter.operator.operator)}
+                        </Badge>
+                      </div>
+                      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm">
+                        <span className="rounded-full bg-background/70 px-3 py-1 font-medium text-foreground">
+                          {Array.isArray(filter.value)
+                            ? `${filter.value[0]} → ${filter.value[1]}`
+                            : String(filter.value)}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="muted"
+                          size="sm"
+                          onClick={() => handleRemoveFilter(filter.id)}
+                          className="gap-2"
+                        >
+                          <Trash2 size={16} /> Remove
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-6 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => handleOpenPanel('category')}
+                  className="flex items-center gap-3 rounded-full border border-dashed border-orange-400/70 bg-orange-500/10 px-4 py-2 text-sm font-semibold text-orange-200 transition hover:border-orange-400 hover:bg-orange-500/20"
+                >
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-orange-500 text-white">
+                    <Plus size={18} />
+                  </span>
+                  Add another filter
+                </button>
+                <p className="text-xs text-muted-foreground">
+                  Chain length:{' '}
+                  <span className="font-semibold text-foreground">{filters.length}</span>
+                </p>
+              </div>
+            </div>
           </div>
         </Card>
       </section>
 
       <aside className="space-y-6">
-        <Card>
-          <CardTitle className="flex items-center gap-2">
-            <Filter size={18} /> Active filters
-          </CardTitle>
-          <CardDescription>Adjust or remove saved filters before applying them to the dataset.</CardDescription>
-
-          <div className="mt-6 space-y-3">
-            {filters.length === 0 && <p className="text-sm text-muted-foreground">No filters saved yet.</p>}
-            {filters.map((filter) => (
-              <div
-                key={filter.id}
-                className="flex items-start justify-between gap-4 rounded-xl border border-white/5 bg-white/5 px-4 py-3"
-              >
-                <div className="space-y-1 text-sm">
-                  <p className="font-semibold text-foreground">
-                    {filter.columnLabel}{' '}
-                    <span className="text-muted-foreground">· {describeOperator(filter.operator.operator)}</span>
-                  </p>
-                  <p className="text-xs text-muted-foreground">{filter.description}</p>
-                  <Badge className="bg-transparent text-muted-foreground">
-                    Value:{' '}
-                    {Array.isArray(filter.value) ? `${filter.value[0]} → ${filter.value[1]}` : String(filter.value)}
-                  </Badge>
-                </div>
-                <Button variant="muted" size="sm" onClick={() => handleRemoveFilter(filter.id)} className="gap-2">
-                  <Trash2 size={16} /> Remove
-                </Button>
-              </div>
-            ))}
+        <Card className="space-y-6">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Filter size={18} /> Apply flow
+            </CardTitle>
+            <CardDescription>
+              Run the current flow against the uploaded dataset, preview the remaining rows, and export the result.
+            </CardDescription>
           </div>
 
-          <div className="mt-8 flex flex-wrap items-center gap-3">
+          <div className="rounded-2xl border border-white/10 bg-background/70 p-5">
+            <div className="flex flex-col gap-4 text-sm text-muted-foreground">
+              <div className="flex items-center justify-between">
+                <span>Uploaded rows</span>
+                <span className="text-base font-semibold text-foreground">{totalRows.toLocaleString()}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Filters in flow</span>
+                <span className="text-base font-semibold text-foreground">{filters.length}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Preview</span>
+                <span className="text-base font-semibold text-foreground">
+                  {filterResult === null ? '—' : filterResult.length.toLocaleString()}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
             <Button
               type="button"
-              variant="outline"
-              className="gap-2"
+              className="w-full gap-2 text-base font-semibold"
               onClick={handleFilterDown}
               disabled={filters.length === 0 || !datasetRows}
             >
-              <Filter size={16} /> Filter down
+              <Filter size={18} /> Filter
             </Button>
             <Button
               type="button"
-              className="gap-2"
+              variant="outline"
+              className="w-full gap-2"
               onClick={handleExportFiltered}
               disabled={!filterResult || !datasetColumns}
             >
-              <Download size={16} /> Export filtered
+              <Download size={16} /> Download filtered CSV
             </Button>
           </div>
 
-          <p className="mt-4 text-sm text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             {filterResult === null
               ? totalRows > 0
-                ? `Apply the filters to preview how many of the ${totalRows.toLocaleString()} uploaded rows remain.`
-                : 'Upload a dataset to calculate filtered results.'
+                ? 'Apply the flow to reveal how many wallets remain.'
+                : 'Upload a dataset to begin filtering.'
               : `Filtered rows: ${filterResult.length.toLocaleString()} of ${totalRows.toLocaleString()}`}
           </p>
-          {filterError && <p className="mt-2 text-sm text-red-400">{filterError}</p>}
+          {filterError && <p className="text-sm text-red-400">{filterError}</p>}
         </Card>
       </aside>
     </div>
