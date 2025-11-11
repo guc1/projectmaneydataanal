@@ -75,6 +75,8 @@ const ensureConditionalConfig = (
 
 const describeConditionalConfig = (config: ConditionalFlagConfig) => {
   switch (config.mode) {
+    case 'boolean':
+      return 'Text equals “true” (case-insensitive)';
     case 'binary':
       return `Value equals “${config.trueValue}”`;
     case 'min':
@@ -101,6 +103,8 @@ const validateConditionalConfig = (config: AnalysisStepConfig | undefined) => {
       if (!config.trueValue || config.trueValue.trim().length === 0) {
         return { valid: false, error: 'Provide the value that should be treated as true.' } as const;
       }
+      return { valid: true, config } as const;
+    case 'boolean':
       return { valid: true, config } as const;
     case 'min':
     case 'max':
@@ -533,8 +537,20 @@ export function AnalysisBuilder() {
           const trueValue =
             base.mode === 'binary' && base.trueValue.trim().length > 0
               ? base.trueValue
-              : 'true';
+              : base.mode === 'boolean' && base.trueValue && base.trueValue.trim().length > 0
+                ? base.trueValue
+                : 'true';
           nextConfig = { kind: 'conditional-flag', mode: 'binary', trueValue };
+          break;
+        }
+        case 'boolean': {
+          const trueValue =
+            base.mode === 'binary' && base.trueValue.trim().length > 0
+              ? base.trueValue
+              : base.mode === 'boolean' && base.trueValue && base.trueValue.trim().length > 0
+                ? base.trueValue
+                : 'true';
+          nextConfig = { kind: 'conditional-flag', mode: 'boolean', trueValue };
           break;
         }
         case 'min': {
@@ -921,6 +937,18 @@ export function AnalysisBuilder() {
       ? form.config
       : null;
   const selectedColumnIsNumeric = isNumericColumn(form.column);
+  const textConditionalMode =
+    conditionalFormConfig && !selectedColumnIsNumeric
+      ? conditionalFormConfig.mode === 'boolean'
+        ? 'boolean'
+        : 'binary'
+      : null;
+  const textTrueValue =
+    conditionalFormConfig?.mode === 'binary'
+      ? conditionalFormConfig.trueValue
+      : conditionalFormConfig?.mode === 'boolean'
+        ? conditionalFormConfig.trueValue ?? 'true'
+        : 'true';
 
   if (!isReady) {
     return (
@@ -1301,17 +1329,46 @@ export function AnalysisBuilder() {
                         )}
                       </>
                     ) : (
-                      <div className="space-y-2">
-                        <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                          Value treated as true
-                        </label>
-                        <Input
-                          value={conditionalFormConfig.trueValue}
-                          onChange={(event) => handleConditionalTrueValueChange(event.target.value)}
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Rows matching this value receive 1; everything else returns 0.
-                        </p>
+                      <div className="space-y-4">
+                        <div className="flex flex-wrap gap-2">
+                          {(['binary', 'boolean'] as const).map((mode) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => handleConditionalModeChange(mode)}
+                              className={cn(
+                                'rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground transition hover:border-accent/40 hover:bg-accent/10 hover:text-foreground',
+                                textConditionalMode === mode &&
+                                  'border-accent/60 bg-accent/10 text-foreground shadow-glow'
+                              )}
+                            >
+                              {mode === 'binary' ? 'Match value' : 'Boolean text'}
+                            </button>
+                          ))}
+                        </div>
+
+                        {textConditionalMode === 'boolean' ? (
+                          <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-muted-foreground">
+                            <p>
+                              Rows receive 1 when the cell contains the text{' '}
+                              <strong className="text-foreground">true</strong> (case-insensitive). Empty or other values return
+                              0.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                              Value treated as true
+                            </label>
+                            <Input
+                              value={textTrueValue}
+                              onChange={(event) => handleConditionalTrueValueChange(event.target.value)}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Rows matching this value receive 1; everything else returns 0.
+                            </p>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
