@@ -2,7 +2,34 @@ import type { ColumnDataType } from '@/data/column-metadata';
 
 export type AnalysisOperator = '+' | '-' | '*' | '/';
 
-export type AnalysisMethodId = 'bell-curve-distance';
+export type AnalysisMethodId = 'bell-curve-distance' | 'conditional-flag';
+
+export type ConditionalFlagConfig =
+  | {
+      kind: 'conditional-flag';
+      mode: 'binary';
+      trueValue: string;
+    }
+  | {
+      kind: 'conditional-flag';
+      mode: 'min';
+      threshold: number;
+    }
+  | {
+      kind: 'conditional-flag';
+      mode: 'max';
+      threshold: number;
+    }
+  | {
+      kind: 'conditional-flag';
+      mode: 'range';
+      min: number;
+      max: number;
+    };
+
+export type AnalysisStepConfig = ConditionalFlagConfig;
+
+export const DEFAULT_ANALYSIS_WEIGHT = 1;
 
 export interface AnalysisTemplatePayload {
   columnKey: string;
@@ -11,6 +38,8 @@ export interface AnalysisTemplatePayload {
   methodId: AnalysisMethodId;
   methodName: string;
   description?: string | null;
+  weight?: number;
+  config?: AnalysisStepConfig;
 }
 
 export interface AnalysisChainPayload {

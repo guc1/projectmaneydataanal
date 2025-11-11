@@ -15,10 +15,13 @@ import { useUploadContext } from '@/components/upload/upload-context';
 import { ANALYSIS_METHODS, analysisMethodMap, evaluateFormula } from '@/lib/analysis/methods';
 import type {
   AnalysisOperator,
+  AnalysisStepConfig,
   AnalysisTemplatePayload,
   SavedAnalysisChainRecord,
-  SavedAnalysisPresetRecord
+  SavedAnalysisPresetRecord,
+  ConditionalFlagConfig
 } from '@/lib/analysis-presets/types';
+import { DEFAULT_ANALYSIS_WEIGHT } from '@/lib/analysis-presets/types';
 import { METRIC_CATEGORY_GROUPS, mapCategoryColumns } from '@/lib/metrics/category-groups';
 import type { DatasetRow } from '@/lib/upload-parsers';
 import { cn } from '@/lib/utils';
@@ -26,6 +29,94 @@ import { cn } from '@/lib/utils';
 const OPERATOR_OPTIONS: AnalysisOperator[] = ['+', '-', '*', '/'];
 
 const EMPTY_COLUMNS: ColumnMetadata[] = [];
+
+const NUMERIC_DATA_TYPES = new Set<ColumnMetadata['data_type']>(['numeric', 'percent', 'ratio', 'currency']);
+
+const isNumericColumn = (column: ColumnMetadata | undefined | null) =>
+  column ? NUMERIC_DATA_TYPES.has(column.data_type) : false;
+
+const coerceWeight = (weight: number | undefined) =>
+  typeof weight === 'number' && Number.isFinite(weight) ? weight : DEFAULT_ANALYSIS_WEIGHT;
+
+const isConditionalStepConfig = (
+  config: AnalysisStepConfig | undefined
+): config is ConditionalFlagConfig => config?.kind === 'conditional-flag';
+
+const deriveNumericBaseline = (column: ColumnMetadata | undefined) => {
+  const candidate = column?.average ?? column?.median ?? 0;
+  return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : 0;
+};
+
+const createDefaultConditionalConfig = (column: ColumnMetadata | undefined): ConditionalFlagConfig => {
+  if (isNumericColumn(column)) {
+    return {
+      kind: 'conditional-flag',
+      mode: 'min',
+      threshold: deriveNumericBaseline(column)
+    };
+  }
+
+  return {
+    kind: 'conditional-flag',
+    mode: 'binary',
+    trueValue: 'true'
+  };
+};
+
+const ensureConditionalConfig = (
+  column: ColumnMetadata | undefined,
+  config: AnalysisStepConfig | undefined
+): ConditionalFlagConfig => {
+  if (isConditionalStepConfig(config)) {
+    return config;
+  }
+  return createDefaultConditionalConfig(column);
+};
+
+const describeConditionalConfig = (config: ConditionalFlagConfig) => {
+  switch (config.mode) {
+    case 'binary':
+      return `Value equals “${config.trueValue}”`;
+    case 'min':
+      return `Value ≥ ${config.threshold.toLocaleString()}`;
+    case 'max':
+      return `Value ≤ ${config.threshold.toLocaleString()}`;
+    case 'range': {
+      const lower = Math.min(config.min, config.max);
+      const upper = Math.max(config.min, config.max);
+      return `Value between ${lower.toLocaleString()} and ${upper.toLocaleString()}`;
+    }
+    default:
+      return '';
+  }
+};
+
+const validateConditionalConfig = (config: AnalysisStepConfig | undefined) => {
+  if (!isConditionalStepConfig(config)) {
+    return { valid: false, error: 'Configure the condition before adding this step.' } as const;
+  }
+
+  switch (config.mode) {
+    case 'binary':
+      if (!config.trueValue || config.trueValue.trim().length === 0) {
+        return { valid: false, error: 'Provide the value that should be treated as true.' } as const;
+      }
+      return { valid: true, config } as const;
+    case 'min':
+    case 'max':
+      if (!Number.isFinite(config.threshold)) {
+        return { valid: false, error: 'Enter a numeric threshold for this condition.' } as const;
+      }
+      return { valid: true, config } as const;
+    case 'range':
+      if (!Number.isFinite(config.min) || !Number.isFinite(config.max)) {
+        return { valid: false, error: 'Enter both bounds for the numeric range.' } as const;
+      }
+      return { valid: true, config } as const;
+    default:
+      return { valid: false, error: 'Configure the condition before adding this step.' } as const;
+  }
+};
 
 const downloadCsv = (rows: DatasetRow[], columns: string[], filename: string) => {
   const escapeCell = (value: string | undefined) => {
@@ -55,11 +146,15 @@ type FormulaStep = {
   id: string;
   column: ColumnMetadata;
   methodId: AnalysisTemplatePayload['methodId'];
+  weight: number;
+  config?: AnalysisStepConfig;
 };
 
 type FormState = {
   column?: ColumnMetadata;
   methodId?: AnalysisTemplatePayload['methodId'];
+  weight: number;
+  config?: AnalysisStepConfig;
   error?: string | null;
 };
 
@@ -81,7 +176,7 @@ export function AnalysisBuilder() {
   const availableColumns = columnMetadata ?? EMPTY_COLUMNS;
   const currentUserId = session?.user?.id ?? null;
 
-  const [form, setForm] = useState<FormState>({});
+  const [form, setForm] = useState<FormState>({ weight: DEFAULT_ANALYSIS_WEIGHT });
   const [steps, setSteps] = useState<FormulaStep[]>([]);
   const [operators, setOperators] = useState<AnalysisOperator[]>([]);
   const [pendingOperator, setPendingOperator] = useState<AnalysisOperator>('+');
@@ -99,6 +194,20 @@ export function AnalysisBuilder() {
   const [authorFilter, setAuthorFilter] = useState<string>('all');
   const [isSavingPreset, setIsSavingPreset] = useState(false);
   const [isSavingChain, setIsSavingChain] = useState(false);
+
+  useEffect(() => {
+    if (form.methodId === 'conditional-flag' && !isConditionalStepConfig(form.config)) {
+      setForm((previous) => {
+        if (previous.methodId !== 'conditional-flag' || isConditionalStepConfig(previous.config)) {
+          return previous;
+        }
+        return {
+          ...previous,
+          config: createDefaultConditionalConfig(previous.column)
+        };
+      });
+    }
+  }, [form.methodId, form.config, form.column]);
 
   const generateId = () =>
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -310,12 +419,17 @@ export function AnalysisBuilder() {
   };
 
   const handleSelectColumn = (column: ColumnMetadata) => {
-    setForm({ column, methodId: undefined, error: null });
+    setForm({ column, methodId: undefined, weight: DEFAULT_ANALYSIS_WEIGHT, config: undefined, error: null });
     setIsBrowsingMetrics(false);
   };
 
   const handleSelectMethod = (methodId: AnalysisTemplatePayload['methodId']) => {
-    setForm((previous) => ({ ...previous, methodId, error: null }));
+    setForm((previous) => ({
+      ...previous,
+      methodId,
+      config: methodId === 'conditional-flag' ? createDefaultConditionalConfig(previous.column) : undefined,
+      error: null
+    }));
   };
 
   const handleAddStep = () => {
@@ -324,11 +438,25 @@ export function AnalysisBuilder() {
       return;
     }
 
+    const weight = coerceWeight(form.weight);
+    let stepConfig: ConditionalFlagConfig | undefined;
+
+    if (form.methodId === 'conditional-flag') {
+      const validation = validateConditionalConfig(form.config);
+      if (!validation.valid) {
+        setForm((previous) => ({ ...previous, error: validation.error }));
+        return;
+      }
+      stepConfig = validation.config;
+    }
+
     setSteps((previous) => {
       const nextStep: FormulaStep = {
         id: generateId(),
         column: form.column as ColumnMetadata,
-        methodId: form.methodId
+        methodId: form.methodId,
+        weight,
+        config: stepConfig ? { ...stepConfig } : undefined
       };
       const updated = [...previous, nextStep];
       if (updated.length > 1) {
@@ -336,7 +464,13 @@ export function AnalysisBuilder() {
       }
       return updated;
     });
-    setForm((previous) => ({ ...previous, methodId: undefined, error: null }));
+    setForm((previous) => ({
+      ...previous,
+      methodId: undefined,
+      weight: DEFAULT_ANALYSIS_WEIGHT,
+      config: undefined,
+      error: null
+    }));
     setAnalysisResultRows(null);
     setAnalysisResultColumns(null);
     setAnalysisError(null);
@@ -359,6 +493,161 @@ export function AnalysisBuilder() {
         return next;
       });
       return updated;
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleStepWeightChange = (id: string, value: string) => {
+    const parsed = Number.parseFloat(value);
+    const nextWeight = Number.isNaN(parsed) ? DEFAULT_ANALYSIS_WEIGHT : parsed;
+
+    setSteps((previous) =>
+      previous.map((step) => (step.id === id ? { ...step, weight: coerceWeight(nextWeight) } : step))
+    );
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleFormWeightChange = (value: string) => {
+    const parsed = Number.parseFloat(value);
+    setForm((previous) => ({
+      ...previous,
+      weight: Number.isNaN(parsed) ? DEFAULT_ANALYSIS_WEIGHT : parsed
+    }));
+  };
+
+  const handleConditionalModeChange = (mode: ConditionalFlagConfig['mode']) => {
+    setForm((previous) => {
+      if (previous.methodId !== 'conditional-flag') {
+        return previous;
+      }
+
+      const base = ensureConditionalConfig(previous.column, previous.config);
+      let nextConfig: ConditionalFlagConfig;
+
+      switch (mode) {
+        case 'binary': {
+          const trueValue =
+            base.mode === 'binary' && base.trueValue.trim().length > 0
+              ? base.trueValue
+              : 'true';
+          nextConfig = { kind: 'conditional-flag', mode: 'binary', trueValue };
+          break;
+        }
+        case 'min': {
+          const fallback = deriveNumericBaseline(previous.column);
+          const candidate =
+            base.mode === 'min' ? base.threshold : base.mode === 'range' ? base.min : fallback;
+          const threshold = Number.isFinite(candidate) ? candidate : fallback;
+          nextConfig = { kind: 'conditional-flag', mode: 'min', threshold };
+          break;
+        }
+        case 'max': {
+          const fallback = deriveNumericBaseline(previous.column);
+          const candidate =
+            base.mode === 'max' ? base.threshold : base.mode === 'range' ? base.max : fallback;
+          const threshold = Number.isFinite(candidate) ? candidate : fallback;
+          nextConfig = { kind: 'conditional-flag', mode: 'max', threshold };
+          break;
+        }
+        case 'range': {
+          const fallback = deriveNumericBaseline(previous.column);
+          const min =
+            base.mode === 'range'
+              ? base.min
+              : base.mode === 'min'
+                ? base.threshold
+                : fallback;
+          const max =
+            base.mode === 'range'
+              ? base.max
+              : base.mode === 'max'
+                ? base.threshold
+                : fallback;
+          const safeMin = Number.isFinite(min) ? min : fallback;
+          const safeMax = Number.isFinite(max) ? max : fallback;
+          nextConfig = { kind: 'conditional-flag', mode: 'range', min: safeMin, max: safeMax };
+          break;
+        }
+        default:
+          nextConfig = base;
+      }
+
+      return { ...previous, config: nextConfig, error: null };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleConditionalTrueValueChange = (value: string) => {
+    setForm((previous) => {
+      if (
+        previous.methodId !== 'conditional-flag' ||
+        !isConditionalStepConfig(previous.config) ||
+        previous.config.mode !== 'binary'
+      ) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        config: { ...previous.config, trueValue: value },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleConditionalThresholdChange = (mode: 'min' | 'max', value: string) => {
+    const parsed = Number.parseFloat(value);
+    setForm((previous) => {
+      if (
+        previous.methodId !== 'conditional-flag' ||
+        !isConditionalStepConfig(previous.config) ||
+        previous.config.mode !== mode
+      ) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        config: {
+          ...previous.config,
+          threshold: Number.isNaN(parsed) ? previous.config.threshold : parsed
+        },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleConditionalRangeChange = (bound: 'min' | 'max', value: string) => {
+    const parsed = Number.parseFloat(value);
+    setForm((previous) => {
+      if (
+        previous.methodId !== 'conditional-flag' ||
+        !isConditionalStepConfig(previous.config) ||
+        previous.config.mode !== 'range'
+      ) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        config: {
+          ...previous.config,
+          [bound]: Number.isNaN(parsed) ? previous.config[bound] : parsed
+        },
+        error: null
+      };
     });
     setAnalysisResultRows(null);
     setAnalysisResultColumns(null);
@@ -415,7 +704,12 @@ export function AnalysisBuilder() {
     downloadCsv(analysisResultRows, analysisResultColumns, `${resultName || 'analysis'}-results.csv`);
   };
 
-  const buildTemplate = (column: ColumnMetadata, methodId: AnalysisTemplatePayload['methodId']): TemplatePayload => {
+  const buildTemplate = (
+    column: ColumnMetadata,
+    methodId: AnalysisTemplatePayload['methodId'],
+    weight: number,
+    config?: AnalysisStepConfig
+  ): TemplatePayload => {
     const method = analysisMethodMap.get(methodId);
     return {
       columnKey: column.metric,
@@ -423,7 +717,9 @@ export function AnalysisBuilder() {
       dataType: column.data_type,
       methodId,
       methodName: method?.name ?? methodId,
-      description: column.what_it_is
+      description: column.what_it_is,
+      weight,
+      config: methodId === 'conditional-flag' && config ? { ...config } : undefined
     };
   };
 
@@ -434,7 +730,13 @@ export function AnalysisBuilder() {
       return;
     }
 
-    setForm({ column, methodId: preset.template.methodId, error: null });
+    const weight = coerceWeight(preset.template.weight);
+    const config =
+      preset.template.methodId === 'conditional-flag'
+        ? ensureConditionalConfig(column, preset.template.config)
+        : undefined;
+
+    setForm({ column, methodId: preset.template.methodId, weight, config, error: null });
     setIsBrowsingMetrics(false);
   };
 
@@ -449,7 +751,13 @@ export function AnalysisBuilder() {
       if (!column) {
         continue;
       }
-      resolvedSteps.push({ id: generateId(), column, methodId: template.methodId });
+      const weight = coerceWeight(template.weight);
+      const config =
+        template.methodId === 'conditional-flag'
+          ? ensureConditionalConfig(column, template.config)
+          : undefined;
+
+      resolvedSteps.push({ id: generateId(), column, methodId: template.methodId, weight, config });
       if (index < chain.operators.length) {
         resolvedOperators.push(chain.operators[index]);
       }
@@ -476,6 +784,18 @@ export function AnalysisBuilder() {
       return;
     }
 
+    const weight = coerceWeight(form.weight);
+    let presetConfig: ConditionalFlagConfig | undefined;
+
+    if (form.methodId === 'conditional-flag') {
+      const validation = validateConditionalConfig(form.config);
+      if (!validation.valid) {
+        setForm((previous) => ({ ...previous, error: validation.error }));
+        return;
+      }
+      presetConfig = validation.config;
+    }
+
     const defaultName = `${form.column.metric} · ${analysisMethodMap.get(form.methodId)?.name ?? form.methodId}`;
     const response = window.prompt('Name this analysis preset', defaultName);
     if (!response) {
@@ -488,7 +808,7 @@ export function AnalysisBuilder() {
       const payload = {
         type: 'single' as const,
         name: response.trim(),
-        template: buildTemplate(form.column, form.methodId)
+        template: buildTemplate(form.column, form.methodId, weight, presetConfig)
       };
 
       const request = await fetch('/api/analysis-presets', {
@@ -548,7 +868,9 @@ export function AnalysisBuilder() {
     try {
       const chainPayload: ChainPayload = {
         resultName: resultName || 'analysis_score',
-        steps: steps.map((step) => buildTemplate(step.column, step.methodId)),
+        steps: steps.map((step) =>
+          buildTemplate(step.column, step.methodId, coerceWeight(step.weight), step.config)
+        ),
         operators: operators.slice(0, Math.max(0, steps.length - 1))
       };
 
@@ -589,6 +911,11 @@ export function AnalysisBuilder() {
 
   const shouldShowCategoryBrowser = (!form.column || isBrowsingMetrics) && activePanel !== 'single' && activePanel !== 'chain';
   const previewRows = analysisResultRows?.slice(0, 10) ?? null;
+  const conditionalFormConfig =
+    form.methodId === 'conditional-flag' && isConditionalStepConfig(form.config)
+      ? form.config
+      : null;
+  const selectedColumnIsNumeric = isNumericColumn(form.column);
 
   if (!isReady) {
     return (
@@ -856,6 +1183,136 @@ export function AnalysisBuilder() {
                 })}
               </div>
 
+              <div className="mt-6 space-y-6">
+                <div className="max-w-xs">
+                  <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Weight
+                  </label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    value={form.weight}
+                    onChange={(event) => handleFormWeightChange(event.target.value)}
+                    className="mt-1"
+                  />
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Each row score from this analysis is multiplied by the weight before it joins the formula.
+                  </p>
+                </div>
+
+                {form.methodId === 'conditional-flag' && form.column && conditionalFormConfig && (
+                  <div className="space-y-4 rounded-xl border border-white/10 bg-background/80 p-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Condition settings
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Define when the statement should return 1 (true) for this column.
+                      </p>
+                    </div>
+
+                    {selectedColumnIsNumeric ? (
+                      <>
+                        <div className="flex flex-wrap gap-2">
+                          {(['min', 'max', 'range'] as const).map((mode) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => handleConditionalModeChange(mode)}
+                              className={cn(
+                                'rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground transition hover:border-accent/40 hover:bg-accent/10 hover:text-foreground',
+                                conditionalFormConfig.mode === mode && 'border-accent/60 bg-accent/10 text-foreground shadow-glow'
+                              )}
+                            >
+                              {mode === 'min' && 'Minimum'}
+                              {mode === 'max' && 'Maximum'}
+                              {mode === 'range' && 'Range'}
+                            </button>
+                          ))}
+                        </div>
+
+                        {conditionalFormConfig.mode === 'min' && (
+                          <div className="space-y-2">
+                            <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                              Minimum value
+                            </label>
+                            <Input
+                              type="number"
+                              step="0.1"
+                              value={conditionalFormConfig.threshold}
+                              onChange={(event) => handleConditionalThresholdChange('min', event.target.value)}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Rows receive 1 when the value is at least this threshold.
+                            </p>
+                          </div>
+                        )}
+
+                        {conditionalFormConfig.mode === 'max' && (
+                          <div className="space-y-2">
+                            <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                              Maximum value
+                            </label>
+                            <Input
+                              type="number"
+                              step="0.1"
+                              value={conditionalFormConfig.threshold}
+                              onChange={(event) => handleConditionalThresholdChange('max', event.target.value)}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Rows receive 1 when the value stays at or below this threshold.
+                            </p>
+                          </div>
+                        )}
+
+                        {conditionalFormConfig.mode === 'range' && (
+                          <div className="grid gap-4 sm:grid-cols-2">
+                            <div className="space-y-2">
+                              <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                                Minimum
+                              </label>
+                              <Input
+                                type="number"
+                                step="0.1"
+                                value={conditionalFormConfig.min}
+                                onChange={(event) => handleConditionalRangeChange('min', event.target.value)}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                                Maximum
+                              </label>
+                              <Input
+                                type="number"
+                                step="0.1"
+                                value={conditionalFormConfig.max}
+                                onChange={(event) => handleConditionalRangeChange('max', event.target.value)}
+                              />
+                            </div>
+                            <p className="sm:col-span-2 text-xs text-muted-foreground">
+                              Rows receive 1 when the value stays within this inclusive range.
+                            </p>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="space-y-2">
+                        <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Value treated as true
+                        </label>
+                        <Input
+                          value={conditionalFormConfig.trueValue}
+                          onChange={(event) => handleConditionalTrueValueChange(event.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Rows matching this value receive 1; everything else returns 0.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="rounded-full bg-white/5 px-3 py-1 uppercase tracking-wide">3. Add to formula</span>
@@ -889,26 +1346,48 @@ export function AnalysisBuilder() {
 
               {steps.length > 0 ? (
                 <div className="mt-6 space-y-5">
-                  <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex flex-wrap items-start gap-3">
                     {steps.map((step, index) => {
                       const method = analysisMethodMap.get(step.methodId);
                       return (
-                        <div key={step.id} className="flex items-center gap-2">
+                        <div key={step.id} className="flex items-start gap-2">
                           <Tooltip.Provider delayDuration={150}>
                             <Tooltip.Root>
                               <Tooltip.Trigger asChild>
-                                <div className="group flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 shadow-sm">
-                                  <div>
-                                    <p className="text-sm font-semibold text-foreground">{step.column.metric}</p>
-                                    <p className="text-xs text-muted-foreground">{method?.name ?? step.methodId}</p>
+                                <div className="group flex w-full max-w-xs flex-col gap-3 rounded-2xl border border-white/10 bg-white/5 p-4 shadow-sm">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                      <p className="text-sm font-semibold text-foreground">{step.column.metric}</p>
+                                      <p className="text-xs text-muted-foreground">{method?.name ?? step.methodId}</p>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveStep(step.id)}
+                                      className="rounded-full bg-background/70 p-1 text-muted-foreground transition hover:bg-red-500/20 hover:text-red-300"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
                                   </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRemoveStep(step.id)}
-                                    className="rounded-full bg-background/70 p-1 text-muted-foreground transition hover:bg-red-500/20 hover:text-red-300"
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
+                                  <div>
+                                    <label className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                      Weight
+                                    </label>
+                                    <Input
+                                      type="number"
+                                      step="0.1"
+                                      value={step.weight}
+                                      onChange={(event) => handleStepWeightChange(step.id, event.target.value)}
+                                      className="mt-1 h-8"
+                                    />
+                                  </div>
+                                  {isConditionalStepConfig(step.config) && (
+                                    <p className="text-[11px] text-muted-foreground">
+                                      Condition:{' '}
+                                      <span className="font-medium text-foreground">
+                                        {describeConditionalConfig(step.config)}
+                                      </span>
+                                    </p>
+                                  )}
                                 </div>
                               </Tooltip.Trigger>
                               <Tooltip.Content className="max-w-xs rounded-lg bg-background/90 p-3 text-xs text-muted-foreground backdrop-blur">

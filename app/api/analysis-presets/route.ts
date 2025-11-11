@@ -15,19 +15,85 @@ import type {
 
 const analysisOperatorSchema = z.enum(['+', '-', '*', '/']);
 
+const conditionalFlagConfigSchema = z
+  .object({
+    kind: z.literal('conditional-flag'),
+    mode: z.enum(['binary', 'min', 'max', 'range']),
+    trueValue: z.string().optional(),
+    threshold: z.number().optional(),
+    min: z.number().optional(),
+    max: z.number().optional()
+  })
+  .superRefine((value, ctx) => {
+    switch (value.mode) {
+      case 'binary':
+        if (!value.trueValue || value.trueValue.trim().length === 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Provide the value that should be treated as true.',
+            path: ['trueValue']
+          });
+        }
+        break;
+      case 'min':
+      case 'max':
+        if (typeof value.threshold !== 'number' || !Number.isFinite(value.threshold)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Enter a valid numeric threshold.',
+            path: ['threshold']
+          });
+        }
+        break;
+      case 'range':
+        if (typeof value.min !== 'number' || !Number.isFinite(value.min)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Enter the minimum bound.',
+            path: ['min']
+          });
+        }
+        if (typeof value.max !== 'number' || !Number.isFinite(value.max)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Enter the maximum bound.',
+            path: ['max']
+          });
+        }
+        break;
+      default:
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Unsupported condition configuration.'
+        });
+    }
+  });
+
 const analysisTemplateSchema = z.object({
   columnKey: z.string().min(1),
   columnLabel: z.string().min(1),
   dataType: z.string().min(1),
   methodId: z.string().min(1),
   methodName: z.string().min(1),
-  description: z.string().max(500).nullable().optional()
+  description: z.string().max(500).nullable().optional(),
+  weight: z.number().finite().optional(),
+  config: conditionalFlagConfigSchema.optional()
+});
+
+const analysisTemplateWithConfigValidation = analysisTemplateSchema.superRefine((value, ctx) => {
+  if (value.methodId !== 'conditional-flag' && value.config) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Only conditional analyses can include a condition configuration.',
+      path: ['config']
+    });
+  }
 });
 
 const analysisChainSchema = z
   .object({
     resultName: z.string().min(1).max(120),
-    steps: z.array(analysisTemplateSchema).min(1),
+    steps: z.array(analysisTemplateWithConfigValidation).min(1),
     operators: z.array(analysisOperatorSchema)
   })
   .refine((value) => value.operators.length === value.steps.length - 1, {
@@ -38,7 +104,7 @@ const createSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('single'),
     name: z.string().min(1).max(120),
-    template: analysisTemplateSchema
+    template: analysisTemplateWithConfigValidation
   }),
   z.object({
     type: z.literal('chain'),

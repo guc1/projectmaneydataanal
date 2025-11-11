@@ -1,12 +1,19 @@
 import type { ColumnMetadata } from '@/data/column-metadata';
 import type { DatasetRow } from '@/lib/upload-parsers';
-import { AnalysisMethodId, type AnalysisOperator } from '@/lib/analysis-presets/types';
+import {
+  AnalysisMethodId,
+  type AnalysisOperator,
+  type AnalysisStepConfig,
+  DEFAULT_ANALYSIS_WEIGHT,
+  type ConditionalFlagConfig
+} from '@/lib/analysis-presets/types';
 
 export type ParsedNumericColumn = (number | null)[];
 
 type AnalysisMethodContext = {
   column: ColumnMetadata;
   values: ParsedNumericColumn;
+  rawValues: (string | undefined)[];
 };
 
 type AnalysisComputation = {
@@ -23,7 +30,7 @@ type AnalysisMethodDefinition = {
   name: string;
   description: string;
   shortDescription: string;
-  compute: (context: AnalysisMethodContext) => AnalysisComputation;
+  compute: (context: AnalysisMethodContext, config?: AnalysisStepConfig) => AnalysisComputation;
 };
 
 const normaliseScore = (zScore: number, maxZ: number) => {
@@ -96,6 +103,129 @@ const computeBellCurveDistance = ({ values }: AnalysisMethodContext): AnalysisCo
   };
 };
 
+const normaliseRawText = (value: string | undefined) => value?.trim().toLowerCase() ?? '';
+
+const isConditionalFlagConfig = (
+  config: AnalysisStepConfig | undefined
+): config is ConditionalFlagConfig => config?.kind === 'conditional-flag';
+
+const emptyConditionalResult = (length: number): AnalysisComputation => ({
+  scores: Array.from({ length }, () => null),
+  diagnostics: { mean: 0, stdDev: 0, maxZ: 0 }
+});
+
+const computeConditionalFlag = (
+  { values, rawValues }: AnalysisMethodContext,
+  config?: AnalysisStepConfig
+): AnalysisComputation => {
+  if (!isConditionalFlagConfig(config)) {
+    return emptyConditionalResult(rawValues.length);
+  }
+
+  const scores: (number | null)[] = new Array(rawValues.length).fill(null);
+
+  switch (config.mode) {
+    case 'binary': {
+      const target = normaliseRawText(config.trueValue);
+      if (!target) {
+        return emptyConditionalResult(rawValues.length);
+      }
+
+      for (let index = 0; index < rawValues.length; index += 1) {
+        const rawValue = rawValues[index];
+        if (!rawValue) {
+          scores[index] = 0;
+          continue;
+        }
+        scores[index] = normaliseRawText(rawValue) === target ? 1 : 0;
+      }
+      break;
+    }
+    case 'min': {
+      const threshold = config.threshold;
+      if (!Number.isFinite(threshold)) {
+        return emptyConditionalResult(values.length);
+      }
+
+      for (let index = 0; index < values.length; index += 1) {
+        const value = values[index];
+        if (value === null || !Number.isFinite(value)) {
+          scores[index] = 0;
+          continue;
+        }
+        scores[index] = value >= threshold ? 1 : 0;
+      }
+      break;
+    }
+    case 'max': {
+      const threshold = config.threshold;
+      if (!Number.isFinite(threshold)) {
+        return emptyConditionalResult(values.length);
+      }
+
+      for (let index = 0; index < values.length; index += 1) {
+        const value = values[index];
+        if (value === null || !Number.isFinite(value)) {
+          scores[index] = 0;
+          continue;
+        }
+        scores[index] = value <= threshold ? 1 : 0;
+      }
+      break;
+    }
+    case 'range': {
+      const min = config.min;
+      const max = config.max;
+      if (!Number.isFinite(min) || !Number.isFinite(max)) {
+        return emptyConditionalResult(values.length);
+      }
+
+      const lower = Math.min(min, max);
+      const upper = Math.max(min, max);
+
+      for (let index = 0; index < values.length; index += 1) {
+        const value = values[index];
+        if (value === null || !Number.isFinite(value)) {
+          scores[index] = 0;
+          continue;
+        }
+        scores[index] = value >= lower && value <= upper ? 1 : 0;
+      }
+      break;
+    }
+    default:
+      return emptyConditionalResult(values.length);
+  }
+
+  const numericScores = scores.filter((score): score is number => score !== null && Number.isFinite(score));
+
+  if (numericScores.length === 0) {
+    return {
+      scores,
+      diagnostics: { mean: 0, stdDev: 0, maxZ: 0 }
+    };
+  }
+
+  const mean = numericScores.reduce((acc, score) => acc + score, 0) / numericScores.length;
+  const variance = numericScores.reduce((acc, score) => acc + (score - mean) ** 2, 0) / numericScores.length;
+  const stdDev = Math.sqrt(variance);
+
+  let maxZ = 0;
+  if (stdDev > 0) {
+    for (const score of numericScores) {
+      const z = Math.abs(score - mean) / stdDev;
+      if (Number.isFinite(z)) {
+        maxZ = Math.max(maxZ, z);
+      }
+    }
+  }
+
+  return {
+    scores,
+    diagnostics: { mean, stdDev, maxZ }
+  };
+};
+
 export const ANALYSIS_METHODS: AnalysisMethodDefinition[] = [
   {
     id: 'bell-curve-distance',
@@ -104,6 +234,14 @@ export const ANALYSIS_METHODS: AnalysisMethodDefinition[] = [
     description:
       'Creates a bell curve from the column values and scores each row based on how far it sits from the centre. The furthest values converge to 1, while typical values stay near 0.',
     compute: computeBellCurveDistance
+  },
+  {
+    id: 'conditional-flag',
+    name: 'Conditional statement',
+    shortDescription: 'Outputs 1 when a custom rule is true for the row, otherwise 0.',
+    description:
+      'Define a true/false check for the selected column. You can match a specific value or set a numeric threshold/range. Rows that satisfy the condition receive a score of 1, while the rest receive 0.',
+    compute: computeConditionalFlag
   }
 ];
 
@@ -124,16 +262,25 @@ export const parseNumericValue = (rawValue: string | undefined): number | null =
 export const extractColumnValues = (rows: DatasetRow[], columnKey: string): ParsedNumericColumn =>
   rows.map((row) => parseNumericValue(row[columnKey]));
 
+const extractRawColumnValues = (rows: DatasetRow[], columnKey: string): (string | undefined)[] =>
+  rows.map((row) => row[columnKey]);
+
 export const evaluateFormula = (
   rows: DatasetRow[],
-  steps: { column: ColumnMetadata; methodId: AnalysisMethodId }[],
+  steps: {
+    column: ColumnMetadata;
+    methodId: AnalysisMethodId;
+    weight?: number;
+    config?: AnalysisStepConfig;
+  }[],
   operators: AnalysisOperator[]
 ): { result: (number | null)[]; stepValues: (number | null)[][] } => {
   if (steps.length === 0) {
     return { result: [], stepValues: [] };
   }
 
-  const cache = new Map<string, ParsedNumericColumn>();
+  const numericCache = new Map<string, ParsedNumericColumn>();
+  const rawCache = new Map<string, (string | undefined)[]>();
   const stepOutputs: (number | null)[][] = [];
 
   steps.forEach((step) => {
@@ -143,14 +290,26 @@ export const evaluateFormula = (
       return;
     }
 
-    let values = cache.get(step.column.metric);
+    let values = numericCache.get(step.column.metric);
     if (!values) {
       values = extractColumnValues(rows, step.column.metric);
-      cache.set(step.column.metric, values);
+      numericCache.set(step.column.metric, values);
     }
 
-    const computation = method.compute({ column: step.column, values });
-    stepOutputs.push(computation.scores);
+    let rawValues = rawCache.get(step.column.metric);
+    if (!rawValues) {
+      rawValues = extractRawColumnValues(rows, step.column.metric);
+      rawCache.set(step.column.metric, rawValues);
+    }
+
+    const computation = method.compute({ column: step.column, values, rawValues }, step.config);
+    const weight = typeof step.weight === 'number' && Number.isFinite(step.weight)
+      ? step.weight
+      : DEFAULT_ANALYSIS_WEIGHT;
+    const weightedScores = computation.scores.map((score) =>
+      score === null || !Number.isFinite(score) ? score : score * weight
+    );
+    stepOutputs.push(weightedScores);
   });
 
   const rowCount = rows.length;
