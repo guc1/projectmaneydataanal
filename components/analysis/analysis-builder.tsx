@@ -19,7 +19,11 @@ import type {
   AnalysisTemplatePayload,
   SavedAnalysisChainRecord,
   SavedAnalysisPresetRecord,
-  ConditionalFlagConfig
+  ConditionalFlagConfig,
+  OneSidedConfig,
+  ZeroToOneConfig,
+  DistributionConfig,
+  SignificanceConfig
 } from '@/lib/analysis-presets/types';
 import { DEFAULT_ANALYSIS_WEIGHT } from '@/lib/analysis-presets/types';
 import { METRIC_CATEGORY_GROUPS, mapCategoryColumns } from '@/lib/metrics/category-groups';
@@ -41,6 +45,18 @@ const coerceWeight = (weight: number | undefined) =>
 const isConditionalStepConfig = (
   config: AnalysisStepConfig | undefined
 ): config is ConditionalFlagConfig => config?.kind === 'conditional-flag';
+
+const isOneSidedConfig = (config: AnalysisStepConfig | undefined): config is OneSidedConfig =>
+  config?.kind === 'one-sided';
+
+const isZeroToOneConfig = (config: AnalysisStepConfig | undefined): config is ZeroToOneConfig =>
+  config?.kind === 'zero-to-one';
+
+const isDistributionConfig = (config: AnalysisStepConfig | undefined): config is DistributionConfig =>
+  config?.kind === 'distribution';
+
+const isSignificanceConfig = (config: AnalysisStepConfig | undefined): config is SignificanceConfig =>
+  config?.kind === 'significance';
 
 const deriveNumericBaseline = (column: ColumnMetadata | undefined) => {
   const candidate = column?.average ?? column?.median ?? 0;
@@ -73,10 +89,169 @@ const ensureConditionalConfig = (
   return createDefaultConditionalConfig(column);
 };
 
+const createDefaultOneSidedConfig = (column: ColumnMetadata | undefined): OneSidedConfig => {
+  const hasAverage = typeof column?.average === 'number' && Number.isFinite(column.average);
+  const hasMedian = typeof column?.median === 'number' && Number.isFinite(column.median);
+
+  const baselineMode: OneSidedConfig['baselineMode'] = hasAverage
+    ? 'average'
+    : hasMedian
+      ? 'median'
+      : 'custom';
+
+  const baselineValue = hasAverage
+    ? (column?.average as number)
+    : hasMedian
+      ? (column?.median as number)
+      : deriveNumericBaseline(column);
+
+  return {
+    kind: 'one-sided',
+    baselineMode,
+    baselineValue,
+    side: 'right',
+    scaling: 'linear',
+    slope: 1
+  };
+};
+
+const ensureOneSidedConfig = (
+  column: ColumnMetadata | undefined,
+  config: AnalysisStepConfig | undefined
+): OneSidedConfig => {
+  const base = isOneSidedConfig(config) ? { ...config } : createDefaultOneSidedConfig(column);
+
+  if (base.scaling === 'quadratic') {
+    base.scaling = 'exponential';
+    base.slope = 2;
+  }
+
+  if (!Number.isFinite(base.slope) || base.slope <= 0) {
+    base.slope = base.scaling === 'linear' ? 1 : base.scaling === 'exponential' ? 2 : 1;
+  }
+
+  return base;
+};
+
+const createDefaultZeroToOneConfig = (): ZeroToOneConfig => ({
+  kind: 'zero-to-one',
+  scaling: 'linear',
+  slope: 1
+});
+
+const ensureZeroToOneConfig = (config: AnalysisStepConfig | undefined): ZeroToOneConfig => {
+  const base = isZeroToOneConfig(config) ? { ...config } : createDefaultZeroToOneConfig();
+
+  if (base.scaling === 'quadratic') {
+    base.scaling = 'exponential';
+    base.slope = 2;
+  }
+
+  if (!Number.isFinite(base.slope) || base.slope <= 0) {
+    base.slope = base.scaling === 'linear' ? 1 : 2;
+  }
+
+  return base;
+};
+
+const createDefaultDistributionConfig = (): DistributionConfig => ({
+  kind: 'distribution',
+  buckets: 5,
+  scaling: 'linear',
+  slope: 1,
+  reward: 'least'
+});
+
+const ensureDistributionConfig = (config: AnalysisStepConfig | undefined): DistributionConfig => {
+  const base = isDistributionConfig(config) ? { ...config } : createDefaultDistributionConfig();
+
+  if (base.scaling === 'quadratic') {
+    base.scaling = 'exponential';
+    base.slope = 2;
+  }
+
+  if (!Number.isFinite(base.slope) || base.slope <= 0) {
+    base.slope = base.scaling === 'linear' ? 1 : 2;
+  }
+
+  if (!Number.isInteger(base.buckets) || base.buckets < 2) {
+    base.buckets = 2;
+  }
+
+  return base;
+};
+
+const createDefaultSignificanceConfig = (): SignificanceConfig => ({
+  kind: 'significance',
+  significanceLevel: 95,
+  mode: 'two-sided',
+  tail: 'upper',
+  flagSignificant: true
+});
+
+const ensureSignificanceConfig = (config: AnalysisStepConfig | undefined): SignificanceConfig => {
+  if (!isSignificanceConfig(config)) {
+    return createDefaultSignificanceConfig();
+  }
+
+  const rawLevel = Number.isFinite(config.significanceLevel) ? config.significanceLevel : 95;
+  const normalisedLevel = rawLevel <= 1 ? rawLevel * 100 : rawLevel;
+  const clampedLevel = Math.min(99.99, Math.max(0.01, normalisedLevel));
+
+  return {
+    kind: 'significance',
+    significanceLevel: clampedLevel,
+    mode: config.mode ?? 'two-sided',
+    tail: config.tail ?? 'upper',
+    flagSignificant: config.flagSignificant
+  };
+};
+
+const createDefaultConfigForMethod = (
+  column: ColumnMetadata | undefined,
+  methodId: AnalysisTemplatePayload['methodId']
+): AnalysisStepConfig | undefined => {
+  switch (methodId) {
+    case 'conditional-flag':
+      return createDefaultConditionalConfig(column);
+    case 'one-sided-distance':
+      return createDefaultOneSidedConfig(column);
+    case 'zero-to-one-scaling':
+      return createDefaultZeroToOneConfig();
+    case 'distribution-density':
+      return createDefaultDistributionConfig();
+    case 'significance-flag':
+      return createDefaultSignificanceConfig();
+    default:
+      return undefined;
+  }
+};
+
+const ensureConfigForMethod = (
+  column: ColumnMetadata | undefined,
+  methodId: AnalysisTemplatePayload['methodId'],
+  config: AnalysisStepConfig | undefined
+): AnalysisStepConfig | undefined => {
+  switch (methodId) {
+    case 'conditional-flag':
+      return ensureConditionalConfig(column, config);
+    case 'one-sided-distance':
+      return ensureOneSidedConfig(column, config);
+    case 'zero-to-one-scaling':
+      return ensureZeroToOneConfig(config);
+    case 'distribution-density':
+      return ensureDistributionConfig(config);
+    case 'significance-flag':
+      return ensureSignificanceConfig(config);
+    default:
+      return undefined;
+  }
+};
+
 const describeConditionalConfig = (config: ConditionalFlagConfig) => {
   switch (config.mode) {
     case 'boolean':
-      return 'Text equals “true” (case-insensitive)';
+      return 'Cell contains any value';
     case 'binary':
       return `Value equals “${config.trueValue}”`;
     case 'min':
@@ -120,6 +295,113 @@ const validateConditionalConfig = (config: AnalysisStepConfig | undefined) => {
     default:
       return { valid: false, error: 'Configure the condition before adding this step.' } as const;
   }
+};
+
+const validateOneSidedConfig = (
+  column: ColumnMetadata | undefined,
+  config: AnalysisStepConfig | undefined
+) => {
+  if (!isOneSidedConfig(config)) {
+    return { valid: false, error: 'Configure the one-sided analysis before adding this step.' } as const;
+  }
+
+  if (!isNumericColumn(column)) {
+    return { valid: false, error: 'Select a numeric column to use the one-sided analysis.' } as const;
+  }
+
+  if (!Number.isFinite(config.baselineValue)) {
+    return { valid: false, error: 'Enter a numeric baseline for the one-sided analysis.' } as const;
+  }
+
+  if (!Number.isFinite(config.slope) || config.slope <= 0) {
+    return { valid: false, error: 'Provide a positive slope to control the score ramp.' } as const;
+  }
+
+  if (!['linear', 'exponential', 'logarithmic', 'quadratic'].includes(config.scaling)) {
+    return { valid: false, error: 'Choose how the scores should ramp away from the baseline.' } as const;
+  }
+
+  return { valid: true, config } as const;
+};
+
+const validateZeroToOneConfig = (
+  column: ColumnMetadata | undefined,
+  config: AnalysisStepConfig | undefined
+) => {
+  if (!isZeroToOneConfig(config)) {
+    return { valid: false, error: 'Configure the scaling before adding this step.' } as const;
+  }
+
+  if (!isNumericColumn(column)) {
+    return { valid: false, error: 'Select a numeric column to scale between 0 and 1.' } as const;
+  }
+
+  if (!['linear', 'exponential', 'logarithmic', 'quadratic'].includes(config.scaling)) {
+    return { valid: false, error: 'Choose how the values should be re-scaled between 0 and 1.' } as const;
+  }
+
+  if (!Number.isFinite(config.slope) || config.slope <= 0) {
+    return { valid: false, error: 'Provide a positive slope for the scaling curve.' } as const;
+  }
+
+  return { valid: true, config } as const;
+};
+
+const validateDistributionConfig = (
+  column: ColumnMetadata | undefined,
+  config: AnalysisStepConfig | undefined
+) => {
+  if (!isDistributionConfig(config)) {
+    return { valid: false, error: 'Configure the distribution buckets before adding this step.' } as const;
+  }
+
+  if (!isNumericColumn(column)) {
+    return { valid: false, error: 'Select a numeric column for the distribution analysis.' } as const;
+  }
+
+  if (!Number.isInteger(config.buckets) || config.buckets < 2) {
+    return { valid: false, error: 'Use at least two buckets to analyse the distribution.' } as const;
+  }
+
+  if (!['linear', 'exponential', 'logarithmic', 'quadratic'].includes(config.scaling)) {
+    return { valid: false, error: 'Select how scores should ramp based on bucket popularity.' } as const;
+  }
+
+  if (!Number.isFinite(config.slope) || config.slope <= 0) {
+    return { valid: false, error: 'Provide a positive slope to control how sharply scores climb.' } as const;
+  }
+
+  return { valid: true, config } as const;
+};
+
+const validateSignificanceConfig = (
+  column: ColumnMetadata | undefined,
+  config: AnalysisStepConfig | undefined
+) => {
+  if (!isSignificanceConfig(config)) {
+    return { valid: false, error: 'Configure the significance check before adding this step.' } as const;
+  }
+
+  if (!isNumericColumn(column)) {
+    return { valid: false, error: 'Select a numeric column to apply the significance test.' } as const;
+  }
+
+  if (!Number.isFinite(config.significanceLevel) || config.significanceLevel <= 0 || config.significanceLevel >= 100) {
+    return {
+      valid: false,
+      error: 'Enter a significance coverage between 0 and 100 (for example 95 for a 95% interval).'
+    } as const;
+  }
+
+  if (!['one-sided', 'two-sided'].includes(config.mode)) {
+    return { valid: false, error: 'Choose whether to test one side or both tails of the distribution.' } as const;
+  }
+
+  if (config.mode === 'one-sided' && !['lower', 'upper'].includes(config.tail)) {
+    return { valid: false, error: 'Select which side of the distribution should count as significant.' } as const;
+  }
+
+  return { valid: true, config } as const;
 };
 
 const downloadCsv = (rows: DatasetRow[], columns: string[], filename: string) => {
@@ -431,7 +713,7 @@ export function AnalysisBuilder() {
     setForm((previous) => ({
       ...previous,
       methodId,
-      config: methodId === 'conditional-flag' ? createDefaultConditionalConfig(previous.column) : undefined,
+      config: createDefaultConfigForMethod(previous.column, methodId),
       error: null
     }));
   };
@@ -443,15 +725,56 @@ export function AnalysisBuilder() {
     }
 
     const weight = coerceWeight(form.weight);
-    let stepConfig: ConditionalFlagConfig | undefined;
+    let stepConfig: AnalysisStepConfig | undefined;
 
-    if (form.methodId === 'conditional-flag') {
-      const validation = validateConditionalConfig(form.config);
-      if (!validation.valid) {
-        setForm((previous) => ({ ...previous, error: validation.error }));
-        return;
+    switch (form.methodId) {
+      case 'conditional-flag': {
+        const validation = validateConditionalConfig(form.config);
+        if (!validation.valid) {
+          setForm((previous) => ({ ...previous, error: validation.error }));
+          return;
+        }
+        stepConfig = validation.config;
+        break;
       }
-      stepConfig = validation.config;
+      case 'one-sided-distance': {
+        const validation = validateOneSidedConfig(form.column, form.config);
+        if (!validation.valid) {
+          setForm((previous) => ({ ...previous, error: validation.error }));
+          return;
+        }
+        stepConfig = validation.config;
+        break;
+      }
+      case 'zero-to-one-scaling': {
+        const validation = validateZeroToOneConfig(form.column, form.config);
+        if (!validation.valid) {
+          setForm((previous) => ({ ...previous, error: validation.error }));
+          return;
+        }
+        stepConfig = validation.config;
+        break;
+      }
+      case 'distribution-density': {
+        const validation = validateDistributionConfig(form.column, form.config);
+        if (!validation.valid) {
+          setForm((previous) => ({ ...previous, error: validation.error }));
+          return;
+        }
+        stepConfig = validation.config;
+        break;
+      }
+      case 'significance-flag': {
+        const validation = validateSignificanceConfig(form.column, form.config);
+        if (!validation.valid) {
+          setForm((previous) => ({ ...previous, error: validation.error }));
+          return;
+        }
+        stepConfig = validation.config;
+        break;
+      }
+      default:
+        stepConfig = undefined;
     }
 
     setSteps((previous) => {
@@ -534,23 +857,27 @@ export function AnalysisBuilder() {
 
       switch (mode) {
         case 'binary': {
-          const trueValue =
+          const remembered =
             base.mode === 'binary' && base.trueValue.trim().length > 0
               ? base.trueValue
               : base.mode === 'boolean' && base.trueValue && base.trueValue.trim().length > 0
                 ? base.trueValue
-                : 'true';
+                : '';
+          const trueValue = remembered.trim().length > 0 ? remembered : 'true';
           nextConfig = { kind: 'conditional-flag', mode: 'binary', trueValue };
           break;
         }
         case 'boolean': {
-          const trueValue =
+          const remembered =
             base.mode === 'binary' && base.trueValue.trim().length > 0
               ? base.trueValue
               : base.mode === 'boolean' && base.trueValue && base.trueValue.trim().length > 0
                 ? base.trueValue
-                : 'true';
-          nextConfig = { kind: 'conditional-flag', mode: 'boolean', trueValue };
+                : '';
+          nextConfig =
+            remembered.trim().length > 0
+              ? { kind: 'conditional-flag', mode: 'boolean', trueValue: remembered }
+              : { kind: 'conditional-flag', mode: 'boolean' };
           break;
         }
         case 'min': {
@@ -670,6 +997,359 @@ export function AnalysisBuilder() {
     setAnalysisError(null);
   };
 
+  const handleOneSidedModeChange = (mode: OneSidedConfig['baselineMode']) => {
+    setForm((previous) => {
+      if (previous.methodId !== 'one-sided-distance') {
+        return previous;
+      }
+
+      const base = ensureOneSidedConfig(previous.column, previous.config);
+      const column = previous.column;
+
+      let baselineValue = base.baselineValue;
+      if (mode === 'average') {
+        baselineValue =
+          typeof column?.average === 'number' && Number.isFinite(column.average)
+            ? column.average
+            : deriveNumericBaseline(column);
+      } else if (mode === 'median') {
+        baselineValue =
+          typeof column?.median === 'number' && Number.isFinite(column.median)
+            ? column.median
+            : deriveNumericBaseline(column);
+      } else if (!Number.isFinite(baselineValue)) {
+        baselineValue = deriveNumericBaseline(column);
+      }
+
+      return {
+        ...previous,
+        config: { ...base, baselineMode: mode, baselineValue },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleOneSidedCustomBaselineChange = (value: string) => {
+    const parsed = Number.parseFloat(value);
+    setForm((previous) => {
+      if (previous.methodId !== 'one-sided-distance') {
+        return previous;
+      }
+
+      const base = ensureOneSidedConfig(previous.column, previous.config);
+
+      return {
+        ...previous,
+        config: {
+          ...base,
+          baselineMode: 'custom',
+          baselineValue: Number.isNaN(parsed) ? base.baselineValue : parsed
+        },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleOneSidedSideChange = (side: OneSidedConfig['side']) => {
+    setForm((previous) => {
+      if (previous.methodId !== 'one-sided-distance') {
+        return previous;
+      }
+
+      const base = ensureOneSidedConfig(previous.column, previous.config);
+      return {
+        ...previous,
+        config: { ...base, side },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleOneSidedScalingChange = (scaling: OneSidedConfig['scaling']) => {
+    setForm((previous) => {
+      if (previous.methodId !== 'one-sided-distance') {
+        return previous;
+      }
+
+      const base = ensureOneSidedConfig(previous.column, previous.config);
+      let slope = base.slope;
+
+      if (scaling === 'linear') {
+        slope = 1;
+      } else if (scaling === 'exponential') {
+        slope = base.scaling === 'exponential' && base.slope > 0 ? base.slope : 2;
+      } else if (scaling === 'logarithmic') {
+        slope = base.scaling === 'logarithmic' && base.slope > 0 ? base.slope : 1;
+      }
+
+      return {
+        ...previous,
+        config: { ...base, scaling, slope },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleOneSidedSlopeChange = (value: string) => {
+    const parsed = Number.parseFloat(value);
+    setForm((previous) => {
+      if (previous.methodId !== 'one-sided-distance') {
+        return previous;
+      }
+
+      const base = ensureOneSidedConfig(previous.column, previous.config);
+      return {
+        ...previous,
+        config: {
+          ...base,
+          slope: Number.isNaN(parsed) ? base.slope : Math.max(0.01, parsed)
+        },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleZeroToOneScalingChange = (scaling: ZeroToOneConfig['scaling']) => {
+    setForm((previous) => {
+      if (previous.methodId !== 'zero-to-one-scaling') {
+        return previous;
+      }
+
+      const base = ensureZeroToOneConfig(previous.config);
+      let slope = base.slope;
+
+      if (scaling === 'linear') {
+        slope = 1;
+      } else if (scaling === 'exponential') {
+        slope = base.scaling === 'exponential' && base.slope > 0 ? base.slope : 2;
+      } else if (scaling === 'logarithmic') {
+        slope = base.scaling === 'logarithmic' && base.slope > 0 ? base.slope : 1;
+      }
+
+      return {
+        ...previous,
+        config: { ...base, scaling, slope },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleZeroToOneSlopeChange = (value: string) => {
+    const parsed = Number.parseFloat(value);
+    setForm((previous) => {
+      if (previous.methodId !== 'zero-to-one-scaling') {
+        return previous;
+      }
+
+      const base = ensureZeroToOneConfig(previous.config);
+      return {
+        ...previous,
+        config: {
+          ...base,
+          slope: Number.isNaN(parsed) ? base.slope : Math.max(0.01, parsed)
+        },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleDistributionBucketsChange = (value: string) => {
+    const parsed = Number.parseInt(value, 10);
+    setForm((previous) => {
+      if (previous.methodId !== 'distribution-density') {
+        return previous;
+      }
+
+      const base = ensureDistributionConfig(previous.config);
+      const buckets = Number.isNaN(parsed) ? base.buckets : Math.max(2, parsed);
+
+      return {
+        ...previous,
+        config: { ...base, buckets },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleDistributionScalingChange = (scaling: DistributionConfig['scaling']) => {
+    setForm((previous) => {
+      if (previous.methodId !== 'distribution-density') {
+        return previous;
+      }
+
+      const base = ensureDistributionConfig(previous.config);
+      let slope = base.slope;
+
+      if (scaling === 'linear') {
+        slope = 1;
+      } else if (scaling === 'exponential') {
+        slope = base.scaling === 'exponential' && base.slope > 0 ? base.slope : 2;
+      } else if (scaling === 'logarithmic') {
+        slope = base.scaling === 'logarithmic' && base.slope > 0 ? base.slope : 1;
+      }
+
+      return {
+        ...previous,
+        config: { ...base, scaling, slope },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleDistributionSlopeChange = (value: string) => {
+    const parsed = Number.parseFloat(value);
+    setForm((previous) => {
+      if (previous.methodId !== 'distribution-density') {
+        return previous;
+      }
+
+      const base = ensureDistributionConfig(previous.config);
+      return {
+        ...previous,
+        config: {
+          ...base,
+          slope: Number.isNaN(parsed) ? base.slope : Math.max(0.01, parsed)
+        },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleDistributionRewardChange = (reward: DistributionConfig['reward']) => {
+    setForm((previous) => {
+      if (previous.methodId !== 'distribution-density') {
+        return previous;
+      }
+
+      const base = ensureDistributionConfig(previous.config);
+      return {
+        ...previous,
+        config: { ...base, reward },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleSignificanceLevelChange = (value: string) => {
+    const parsed = Number.parseFloat(value);
+    setForm((previous) => {
+      if (previous.methodId !== 'significance-flag') {
+        return previous;
+      }
+
+      const base = ensureSignificanceConfig(previous.config);
+      return {
+        ...previous,
+        config: {
+          ...base,
+          significanceLevel: Number.isNaN(parsed)
+            ? base.significanceLevel
+            : Math.max(0.01, Math.min(99.99, parsed))
+        },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleSignificanceModeChange = (mode: SignificanceConfig['mode']) => {
+    setForm((previous) => {
+      if (previous.methodId !== 'significance-flag') {
+        return previous;
+      }
+
+      const base = ensureSignificanceConfig(previous.config);
+      const nextTail = mode === 'one-sided' ? base.tail : 'upper';
+
+      return {
+        ...previous,
+        config: {
+          ...base,
+          mode,
+          tail: nextTail
+        },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleSignificanceTailChange = (tail: SignificanceConfig['tail']) => {
+    setForm((previous) => {
+      if (previous.methodId !== 'significance-flag') {
+        return previous;
+      }
+
+      const base = ensureSignificanceConfig(previous.config);
+      return {
+        ...previous,
+        config: {
+          ...base,
+          tail
+        },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
+  const handleToggleSignificanceFlag = (flag: boolean) => {
+    setForm((previous) => {
+      if (previous.methodId !== 'significance-flag') {
+        return previous;
+      }
+
+      const base = ensureSignificanceConfig(previous.config);
+      return {
+        ...previous,
+        config: { ...base, flagSignificant: flag },
+        error: null
+      };
+    });
+    setAnalysisResultRows(null);
+    setAnalysisResultColumns(null);
+    setAnalysisError(null);
+  };
+
   const formatNumber = (value: number | null) => {
     if (value === null || Number.isNaN(value)) {
       return '';
@@ -740,7 +1420,7 @@ export function AnalysisBuilder() {
       methodName: method?.name ?? methodId,
       description: column.what_it_is,
       weight,
-      config: methodId === 'conditional-flag' && config ? { ...config } : undefined
+      config: config ? { ...config } : undefined
     };
   };
 
@@ -752,10 +1432,7 @@ export function AnalysisBuilder() {
     }
 
     const weight = coerceWeight(preset.template.weight);
-    const config =
-      preset.template.methodId === 'conditional-flag'
-        ? ensureConditionalConfig(column, preset.template.config)
-        : undefined;
+    const config = ensureConfigForMethod(column, preset.template.methodId, preset.template.config);
 
     setForm({ column, methodId: preset.template.methodId, weight, config, error: null });
     setIsBrowsingMetrics(false);
@@ -773,10 +1450,7 @@ export function AnalysisBuilder() {
         continue;
       }
       const weight = coerceWeight(template.weight);
-      const config =
-        template.methodId === 'conditional-flag'
-          ? ensureConditionalConfig(column, template.config)
-          : undefined;
+      const config = ensureConfigForMethod(column, template.methodId, template.config);
 
       resolvedSteps.push({ id: generateId(), column, methodId: template.methodId, weight, config });
       if (index < chain.operators.length) {
@@ -806,15 +1480,56 @@ export function AnalysisBuilder() {
     }
 
     const weight = coerceWeight(form.weight);
-    let presetConfig: ConditionalFlagConfig | undefined;
+    let presetConfig: AnalysisStepConfig | undefined;
 
-    if (form.methodId === 'conditional-flag') {
-      const validation = validateConditionalConfig(form.config);
-      if (!validation.valid) {
-        setForm((previous) => ({ ...previous, error: validation.error }));
-        return;
+    switch (form.methodId) {
+      case 'conditional-flag': {
+        const validation = validateConditionalConfig(form.config);
+        if (!validation.valid) {
+          setForm((previous) => ({ ...previous, error: validation.error }));
+          return;
+        }
+        presetConfig = validation.config;
+        break;
       }
-      presetConfig = validation.config;
+      case 'one-sided-distance': {
+        const validation = validateOneSidedConfig(form.column, form.config);
+        if (!validation.valid) {
+          setForm((previous) => ({ ...previous, error: validation.error }));
+          return;
+        }
+        presetConfig = validation.config;
+        break;
+      }
+      case 'zero-to-one-scaling': {
+        const validation = validateZeroToOneConfig(form.column, form.config);
+        if (!validation.valid) {
+          setForm((previous) => ({ ...previous, error: validation.error }));
+          return;
+        }
+        presetConfig = validation.config;
+        break;
+      }
+      case 'distribution-density': {
+        const validation = validateDistributionConfig(form.column, form.config);
+        if (!validation.valid) {
+          setForm((previous) => ({ ...previous, error: validation.error }));
+          return;
+        }
+        presetConfig = validation.config;
+        break;
+      }
+      case 'significance-flag': {
+        const validation = validateSignificanceConfig(form.column, form.config);
+        if (!validation.valid) {
+          setForm((previous) => ({ ...previous, error: validation.error }));
+          return;
+        }
+        presetConfig = validation.config;
+        break;
+      }
+      default:
+        presetConfig = undefined;
     }
 
     const defaultName = `${form.column.metric} · ${analysisMethodMap.get(form.methodId)?.name ?? form.methodId}`;
@@ -936,6 +1651,16 @@ export function AnalysisBuilder() {
     form.methodId === 'conditional-flag' && isConditionalStepConfig(form.config)
       ? form.config
       : null;
+  const oneSidedFormConfig =
+    form.methodId === 'one-sided-distance' && form.column
+      ? ensureOneSidedConfig(form.column, form.config)
+      : null;
+  const zeroToOneFormConfig =
+    form.methodId === 'zero-to-one-scaling' ? ensureZeroToOneConfig(form.config) : null;
+  const distributionFormConfig =
+    form.methodId === 'distribution-density' ? ensureDistributionConfig(form.config) : null;
+  const significanceFormConfig =
+    form.methodId === 'significance-flag' ? ensureSignificanceConfig(form.config) : null;
   const selectedColumnIsNumeric = isNumericColumn(form.column);
   const textConditionalMode =
     conditionalFormConfig && !selectedColumnIsNumeric
@@ -944,11 +1669,13 @@ export function AnalysisBuilder() {
         : 'binary'
       : null;
   const textTrueValue =
-    conditionalFormConfig?.mode === 'binary'
-      ? conditionalFormConfig.trueValue
-      : conditionalFormConfig?.mode === 'boolean'
-        ? conditionalFormConfig.trueValue ?? 'true'
-        : 'true';
+    conditionalFormConfig?.mode === 'binary' ? conditionalFormConfig.trueValue : '';
+  const columnAverage =
+    typeof form.column?.average === 'number' && Number.isFinite(form.column.average)
+      ? form.column.average
+      : null;
+  const columnMedian =
+    typeof form.column?.median === 'number' && Number.isFinite(form.column.median) ? form.column.median : null;
 
   if (!isReady) {
     return (
@@ -1052,6 +1779,7 @@ export function AnalysisBuilder() {
                   'group flex items-center gap-3 rounded-full border border-orange-400/60 bg-orange-500/10 px-4 py-2 text-sm font-semibold text-orange-100 transition hover:border-orange-400 hover:bg-orange-500/20',
                   activePanel === 'category' && 'border-orange-300 bg-orange-500/30 text-white'
                 )}
+
               >
                 <span className="flex h-10 w-10 items-center justify-center rounded-full bg-orange-500 text-white shadow-lg shadow-orange-500/40">
                   <Plus size={18} />
@@ -1102,6 +1830,8 @@ export function AnalysisBuilder() {
                       </Button>
                     )}
                   </div>
+                )}
+
                 )}
               </div>
 
@@ -1349,11 +2079,7 @@ export function AnalysisBuilder() {
 
                         {textConditionalMode === 'boolean' ? (
                           <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-muted-foreground">
-                            <p>
-                              Rows receive 1 when the cell contains the text{' '}
-                              <strong className="text-foreground">true</strong> (case-insensitive). Empty or other values return
-                              0.
-                            </p>
+                            <p>Rows receive 1 when the cell contains any value. Empty cells return 0.</p>
                           </div>
                         ) : (
                           <div className="space-y-2">
@@ -1487,10 +2213,375 @@ export function AnalysisBuilder() {
                             {option}
                           </button>
                         ))}
+                    </div>
+                  </div>
+                )}
+
+                {form.methodId === 'one-sided-distance' && form.column && oneSidedFormConfig && (
+                  <div className="space-y-4 rounded-xl border border-white/10 bg-background/80 p-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        One-sided settings
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Choose a baseline, the side that earns points, and how quickly scores ramp up.
+                      </p>
+                    </div>
+
+                    <div className="space-y-3">
+                      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                        Baseline reference
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {(['average', 'median', 'custom'] as const).map((mode) => {
+                          const isActive = oneSidedFormConfig.baselineMode === mode;
+                          const value =
+                            mode === 'average'
+                              ? columnAverage
+                              : mode === 'median'
+                                ? columnMedian
+                                : oneSidedFormConfig.baselineValue;
+                          return (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => handleOneSidedModeChange(mode)}
+                              className={cn(
+                                'rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs transition hover:border-accent/40 hover:bg-accent/10 hover:text-foreground',
+                                isActive && 'border-accent/60 bg-accent/10 text-foreground shadow-glow'
+                              )}
+                            >
+                              <span className="font-semibold">
+                                {mode === 'average' && 'Column average'}
+                                {mode === 'median' && 'Column median'}
+                                {mode === 'custom' && 'Custom value'}
+                              </span>
+                              {Number.isFinite(value) && (
+                                <span className="mt-1 block text-[10px] uppercase tracking-wide text-muted-foreground">
+                                  {(value as number).toLocaleString(undefined, { maximumFractionDigits: 3 })}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {oneSidedFormConfig.baselineMode === 'custom' && (
+                        <div className="space-y-2">
+                          <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                            Baseline value
+                          </label>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={oneSidedFormConfig.baselineValue}
+                            onChange={(event) => handleOneSidedCustomBaselineChange(event.target.value)}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Scores start at 0 on this value and climb towards 1 at the furthest observation.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Direction</p>
+                      <div className="flex flex-wrap gap-2">
+                        {(['right', 'left'] as const).map((side) => (
+                          <button
+                            key={side}
+                            type="button"
+                            onClick={() => handleOneSidedSideChange(side)}
+                            className={cn(
+                              'rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground transition hover:border-accent/40 hover:bg-accent/10 hover:text-foreground',
+                              oneSidedFormConfig.side === side && 'border-accent/60 bg-accent/10 text-foreground shadow-glow'
+                            )}
+                          >
+                            {side === 'right' ? 'Higher than baseline' : 'Lower than baseline'}
+                          </button>
+                        ))}
                       </div>
                     </div>
-                  )}
-                </div>
+
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                        Scaling curve
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {(['linear', 'exponential', 'logarithmic'] as const).map((mode) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => handleOneSidedScalingChange(mode)}
+                            className={cn(
+                              'rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground transition hover:border-accent/40 hover:bg-accent/10 hover:text-foreground',
+                              oneSidedFormConfig.scaling === mode && 'border-accent/60 bg-accent/10 text-foreground shadow-glow'
+                            )}
+                          >
+                            {mode === 'linear' && 'Linear'}
+                            {mode === 'exponential' && 'Exponential'}
+                            {mode === 'logarithmic' && 'Logarithmic'}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-[160px_auto] sm:items-end">
+                        <div className="space-y-2">
+                          <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                            Slope / steepness
+                          </label>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={oneSidedFormConfig.slope}
+                            onChange={(event) => handleOneSidedSlopeChange(event.target.value)}
+                          />
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Increase the slope to reward rows further from the baseline more aggressively, or lower it to keep the
+                          ramp gentle.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {form.methodId === 'zero-to-one-scaling' && form.column && zeroToOneFormConfig && (
+                  <div className="space-y-4 rounded-xl border border-white/10 bg-background/80 p-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Scaling behaviour
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Rescale the column so the minimum equals 0 and the maximum equals 1.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {(['linear', 'exponential', 'logarithmic'] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => handleZeroToOneScalingChange(mode)}
+                          className={cn(
+                            'rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground transition hover:border-accent/40 hover:bg-accent/10 hover:text-foreground',
+                            zeroToOneFormConfig.scaling === mode && 'border-accent/60 bg-accent/10 text-foreground shadow-glow'
+                          )}
+                        >
+                          {mode === 'linear' && 'Linear'}
+                          {mode === 'exponential' && 'Exponential'}
+                          {mode === 'logarithmic' && 'Logarithmic'}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-[160px_auto] sm:items-end">
+                      <div className="space-y-2">
+                        <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Slope / steepness
+                        </label>
+                        <Input
+                          type="number"
+                          step="0.1"
+                          value={zeroToOneFormConfig.slope}
+                          onChange={(event) => handleZeroToOneSlopeChange(event.target.value)}
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Tune how quickly values race toward 1. Higher slopes boost the upper end faster; lower slopes keep the scale balanced.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {form.methodId === 'distribution-density' && form.column && distributionFormConfig && (
+                  <div className="space-y-4 rounded-xl border border-white/10 bg-background/80 p-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Distribution buckets
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Split the range into equal intervals and score rows based on how crowded their bucket is.
+                      </p>
+                    </div>
+
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Number of buckets
+                        </label>
+                        <Input
+                          type="number"
+                          step="1"
+                          min="1"
+                          value={distributionFormConfig.buckets}
+                          onChange={(event) => handleDistributionBucketsChange(event.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Buckets divide the min-to-max range into equal-width segments.
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Reward direction
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {(['least', 'most'] as const).map((reward) => (
+                            <button
+                              key={reward}
+                              type="button"
+                              onClick={() => handleDistributionRewardChange(reward)}
+                              className={cn(
+                                'w-full rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground transition hover:border-accent/40 hover:bg-accent/10 hover:text-foreground',
+                                distributionFormConfig.reward === reward && 'border-accent/60 bg-accent/10 text-foreground shadow-glow'
+                              )}
+                            >
+                              {reward === 'least' ? 'Reward least common buckets' : 'Reward most common buckets'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                        Score curve
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {(['linear', 'exponential', 'logarithmic'] as const).map((mode) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => handleDistributionScalingChange(mode)}
+                            className={cn(
+                              'rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground transition hover:border-accent/40 hover:bg-accent/10 hover:text-foreground',
+                              distributionFormConfig.scaling === mode && 'border-accent/60 bg-accent/10 text-foreground shadow-glow'
+                            )}
+                          >
+                            {mode === 'linear' && 'Linear'}
+                            {mode === 'exponential' && 'Exponential'}
+                            {mode === 'logarithmic' && 'Logarithmic'}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-[160px_auto] sm:items-end">
+                        <div className="space-y-2">
+                          <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                            Slope / steepness
+                          </label>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={distributionFormConfig.slope}
+                            onChange={(event) => handleDistributionSlopeChange(event.target.value)}
+                          />
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Adjust how much the favoured buckets stand out. Larger slopes create sharper contrasts between bucket scores.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {form.methodId === 'significance-flag' && form.column && significanceFormConfig && (
+                  <div className="space-y-4 rounded-xl border border-white/10 bg-background/80 p-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        Significance threshold
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Choose the coverage for your bell-curve window and decide which tails should count as significant.
+                      </p>
+                    </div>
+
+                    <div className="grid gap-3 lg:grid-cols-3">
+                      <div className="space-y-2">
+                        <label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Coverage (%)
+                        </label>
+                        <Input
+                          type="number"
+                          step="0.1"
+                          min="0.01"
+                          max="99.99"
+                          value={significanceFormConfig.significanceLevel}
+                          onChange={(event) => handleSignificanceLevelChange(event.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Example: 95 keeps the central 95% of the distribution; values outside it are treated as significant.
+                        </p>
+                      </div>
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                            Test direction
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {(['two-sided', 'one-sided'] as const).map((mode) => (
+                              <button
+                                key={mode}
+                                type="button"
+                                onClick={() => handleSignificanceModeChange(mode)}
+                                className={cn(
+                                  'rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground transition hover:border-accent/40 hover:bg-accent/10 hover:text-foreground',
+                                  significanceFormConfig.mode === mode && 'border-accent/60 bg-accent/10 text-foreground shadow-glow'
+                                )}
+                              >
+                                {mode === 'two-sided' ? 'Two-sided' : 'One-sided'}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {significanceFormConfig.mode === 'one-sided' && (
+                          <div className="space-y-2">
+                            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                              Significant tail
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              {(['upper', 'lower'] as const).map((tail) => (
+                                <button
+                                  key={tail}
+                                  type="button"
+                                  onClick={() => handleSignificanceTailChange(tail)}
+                                  className={cn(
+                                    'rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground transition hover:border-accent/40 hover:bg-accent/10 hover:text-foreground',
+                                    significanceFormConfig.tail === tail && 'border-accent/60 bg-accent/10 text-foreground shadow-glow'
+                                  )}
+                                >
+                                  {tail === 'upper' ? 'Higher values' : 'Lower values'}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Output mapping
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {[true, false].map((flag) => (
+                            <button
+                              key={flag ? 'flag-true' : 'flag-false'}
+                              type="button"
+                              onClick={() => handleToggleSignificanceFlag(flag)}
+                              className={cn(
+                                'rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground transition hover:border-accent/40 hover:bg-accent/10 hover:text-foreground',
+                                significanceFormConfig.flagSignificant === flag &&
+                                  'border-accent/60 bg-accent/10 text-foreground shadow-glow'
+                              )}
+                            >
+                              {flag ? 'Significant → 1' : 'Significant → 0'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Non-significant rows automatically receive the opposite score. Two-sided checks look at both tails; one-sided
+                      checks only the selected tail.
+                    </p>
+                  </div>
+                )}
+              </div>
               ) : (
                 <p className="mt-6 text-sm text-muted-foreground">
                   Add steps to see your formula take shape. Each step produces a score between 0 and 1 that you can combine with arithmetic operators.
