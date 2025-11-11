@@ -15,6 +15,13 @@
       "when": 1731801600000,
       "tag": "0002_filter_presets",
       "breakpoints": false
+    },
+    {
+      "idx": 2,
+      "version": "1",
+      "when": 1731888000000,
+      "tag": "0003_analysis_presets",
+      "breakpoints": false
     }
   ]
 }
