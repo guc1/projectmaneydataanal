@@ -5,7 +5,11 @@ import {
   type AnalysisOperator,
   type AnalysisStepConfig,
   DEFAULT_ANALYSIS_WEIGHT,
-  type ConditionalFlagConfig
+  type ConditionalFlagConfig,
+  type OneSidedConfig,
+  type ZeroToOneConfig,
+  type DistributionConfig,
+  type SignificanceConfig
 } from '@/lib/analysis-presets/types';
 
 export type ParsedNumericColumn = (number | null)[];
@@ -49,6 +53,30 @@ const normaliseScore = (zScore: number, maxZ: number) => {
   }
 
   return Math.min(1, Math.max(0, scaled));
+};
+
+const computeDiagnostics = (scores: (number | null)[]): AnalysisComputation['diagnostics'] => {
+  const numericScores = scores.filter((score): score is number => score !== null && Number.isFinite(score));
+
+  if (numericScores.length === 0) {
+    return { mean: 0, stdDev: 0, maxZ: 0 };
+  }
+
+  const mean = numericScores.reduce((acc, value) => acc + value, 0) / numericScores.length;
+  const variance = numericScores.reduce((acc, value) => acc + (value - mean) ** 2, 0) / numericScores.length;
+  const stdDev = Math.sqrt(variance);
+
+  let maxZ = 0;
+  if (stdDev > 0) {
+    for (const value of numericScores) {
+      const z = Math.abs(value - mean) / stdDev;
+      if (Number.isFinite(z)) {
+        maxZ = Math.max(maxZ, z);
+      }
+    }
+  }
+
+  return { mean, stdDev, maxZ };
 };
 
 const computeBellCurveDistance = ({ values }: AnalysisMethodContext): AnalysisComputation => {
@@ -109,6 +137,18 @@ const isConditionalFlagConfig = (
   config: AnalysisStepConfig | undefined
 ): config is ConditionalFlagConfig => config?.kind === 'conditional-flag';
 
+const isOneSidedConfig = (config: AnalysisStepConfig | undefined): config is OneSidedConfig =>
+  config?.kind === 'one-sided';
+
+const isZeroToOneConfig = (config: AnalysisStepConfig | undefined): config is ZeroToOneConfig =>
+  config?.kind === 'zero-to-one';
+
+const isDistributionConfig = (config: AnalysisStepConfig | undefined): config is DistributionConfig =>
+  config?.kind === 'distribution';
+
+const isSignificanceConfig = (config: AnalysisStepConfig | undefined): config is SignificanceConfig =>
+  config?.kind === 'significance';
+
 const emptyConditionalResult = (length: number): AnalysisComputation => ({
   scores: Array.from({ length }, () => null),
   diagnostics: { mean: 0, stdDev: 0, maxZ: 0 }
@@ -128,12 +168,12 @@ const computeConditionalFlag = (
     case 'boolean': {
       for (let index = 0; index < rawValues.length; index += 1) {
         const rawValue = rawValues[index];
-        const normalised = normaliseRawText(rawValue);
-        if (!normalised) {
+        if (typeof rawValue !== 'string') {
           scores[index] = 0;
           continue;
         }
-        scores[index] = normalised === 'true' ? 1 : 0;
+
+        scores[index] = rawValue.trim().length > 0 ? 1 : 0;
       }
       break;
     }
@@ -238,6 +278,380 @@ const computeConditionalFlag = (
   };
 };
 
+const emptyNumericComputation = (length: number): AnalysisComputation => ({
+  scores: Array.from({ length }, () => null),
+  diagnostics: { mean: 0, stdDev: 0, maxZ: 0 }
+});
+
+const extractNumericValues = (values: ParsedNumericColumn) =>
+  values.filter((value): value is number => value !== null && Number.isFinite(value));
+
+const computeMean = (values: number[]) => {
+  if (values.length === 0) return 0;
+  return values.reduce((acc, value) => acc + value, 0) / values.length;
+};
+
+const computeMedian = (values: number[]) => {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) {
+    return (sorted[middle - 1] + sorted[middle]) / 2;
+  }
+  return sorted[middle];
+};
+
+const computeQuantile = (sortedValues: number[], percentile: number) => {
+  if (sortedValues.length === 0) {
+    return 0;
+  }
+
+  const clamped = Math.min(1, Math.max(0, percentile));
+  if (clamped === 0) {
+    return sortedValues[0];
+  }
+  if (clamped === 1) {
+    return sortedValues[sortedValues.length - 1];
+  }
+
+  const index = (sortedValues.length - 1) * clamped;
+  const lowerIndex = Math.floor(index);
+  const upperIndex = Math.ceil(index);
+
+  if (lowerIndex === upperIndex) {
+    return sortedValues[lowerIndex];
+  }
+
+  const fraction = index - lowerIndex;
+  const lowerValue = sortedValues[lowerIndex];
+  const upperValue = sortedValues[upperIndex];
+  return lowerValue + (upperValue - lowerValue) * fraction;
+};
+
+const applyScaling = (
+  value: number,
+  scaling: 'linear' | 'quadratic' | 'exponential' | 'logarithmic',
+  slope?: number
+) => {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  const clamped = Math.min(1, Math.max(0, value));
+  const safeSlope = Number.isFinite(slope) && (slope as number) > 0 ? (slope as number) : 1;
+
+  switch (scaling) {
+    case 'quadratic':
+      return clamped ** 2;
+    case 'exponential':
+      return clamped ** safeSlope;
+    case 'logarithmic': {
+      if (clamped <= 0) {
+        return 0;
+      }
+      const factor = Math.max(0.1, Math.min(safeSlope, 1000));
+      const base = 1 + 9 * factor;
+      return Math.log1p(clamped * (base - 1)) / Math.log(base);
+    }
+    case 'linear':
+    default:
+      return Math.min(1, clamped * safeSlope);
+  }
+};
+
+const resolveOneSidedBaseline = (values: number[], column: ColumnMetadata, config: OneSidedConfig) => {
+  switch (config.baselineMode) {
+    case 'average': {
+      if (typeof column.average === 'number' && Number.isFinite(column.average)) {
+        return column.average;
+      }
+      return computeMean(values);
+    }
+    case 'median': {
+      if (typeof column.median === 'number' && Number.isFinite(column.median)) {
+        return column.median;
+      }
+      return computeMedian(values);
+    }
+    case 'custom':
+    default:
+      return config.baselineValue;
+  }
+};
+
+const computeOneSidedDistance = (
+  context: AnalysisMethodContext,
+  config?: AnalysisStepConfig
+): AnalysisComputation => {
+  if (!isOneSidedConfig(config)) {
+    return emptyNumericComputation(context.values.length);
+  }
+
+  const numericValues = extractNumericValues(context.values);
+  if (numericValues.length === 0) {
+    return emptyNumericComputation(context.values.length);
+  }
+
+  const baseline = resolveOneSidedBaseline(numericValues, context.column, config);
+  if (!Number.isFinite(baseline)) {
+    return emptyNumericComputation(context.values.length);
+  }
+
+  const extreme =
+    config.side === 'right'
+      ? Math.max(baseline, ...numericValues)
+      : Math.min(baseline, ...numericValues);
+
+  const denominator = config.side === 'right' ? extreme - baseline : baseline - extreme;
+  if (!Number.isFinite(denominator) || denominator <= 0) {
+    const scores = context.values.map((value) => (value === null || !Number.isFinite(value) ? null : 0));
+    return { scores, diagnostics: computeDiagnostics(scores) };
+  }
+
+  const scores = context.values.map((value) => {
+    if (value === null || !Number.isFinite(value)) {
+      return null;
+    }
+
+    const scaling = config.scaling ?? 'linear';
+    const slope = config.slope ?? 1;
+
+    if (config.side === 'right') {
+      if (value <= baseline) {
+        return 0;
+      }
+      const distance = (value - baseline) / denominator;
+      return applyScaling(distance, scaling, slope);
+    }
+
+    if (value >= baseline) {
+      return 0;
+    }
+    const distance = (baseline - value) / denominator;
+    return applyScaling(distance, scaling, slope);
+  });
+
+  return {
+    scores,
+    diagnostics: computeDiagnostics(scores)
+  };
+};
+
+const computeZeroToOneScaling = (
+  context: AnalysisMethodContext,
+  config?: AnalysisStepConfig
+): AnalysisComputation => {
+  if (!isZeroToOneConfig(config)) {
+    return emptyNumericComputation(context.values.length);
+  }
+
+  const numericValues = extractNumericValues(context.values);
+  if (numericValues.length === 0) {
+    return emptyNumericComputation(context.values.length);
+  }
+
+  const min = Math.min(...numericValues);
+  const max = Math.max(...numericValues);
+
+  const range = max - min;
+  if (!Number.isFinite(range) || range <= 0) {
+    const scores = context.values.map((value) => (value === null || !Number.isFinite(value) ? null : 0));
+    return { scores, diagnostics: computeDiagnostics(scores) };
+  }
+
+  const scores = context.values.map((value) => {
+    if (value === null || !Number.isFinite(value)) {
+      return null;
+    }
+    const ratio = (value - min) / range;
+    const scaling =
+      config.scaling === 'logarithmic'
+        ? 'logarithmic'
+        : config.scaling === 'exponential'
+          ? 'exponential'
+          : config.scaling === 'quadratic'
+            ? 'quadratic'
+            : 'linear';
+    return applyScaling(ratio, scaling, config.slope);
+  });
+
+  return {
+    scores,
+    diagnostics: computeDiagnostics(scores)
+  };
+};
+
+const computeDistributionDensity = (
+  context: AnalysisMethodContext,
+  config?: AnalysisStepConfig
+): AnalysisComputation => {
+  if (!isDistributionConfig(config)) {
+    return emptyNumericComputation(context.values.length);
+  }
+
+  const bucketCount = Math.max(0, Math.floor(config.buckets));
+  if (bucketCount <= 0) {
+    return emptyNumericComputation(context.values.length);
+  }
+
+  const numericValues = extractNumericValues(context.values);
+  if (numericValues.length === 0) {
+    return emptyNumericComputation(context.values.length);
+  }
+
+  const min = Math.min(...numericValues);
+  const max = Math.max(...numericValues);
+
+  const range = max - min;
+  if (!Number.isFinite(range) || range === 0) {
+    const scores = context.values.map((value) => (value === null || !Number.isFinite(value) ? null : 0));
+    return { scores, diagnostics: computeDiagnostics(scores) };
+  }
+
+  const bucketWidth = range / bucketCount;
+  if (!Number.isFinite(bucketWidth) || bucketWidth === 0) {
+    const scores = context.values.map((value) => (value === null || !Number.isFinite(value) ? null : 0));
+    return { scores, diagnostics: computeDiagnostics(scores) };
+  }
+
+  const counts = new Array(bucketCount).fill(0);
+  const bucketIndices: (number | null)[] = context.values.map((value) => {
+    if (value === null || !Number.isFinite(value)) {
+      return null;
+    }
+    if (value <= min) {
+      counts[0] += 1;
+      return 0;
+    }
+    if (value >= max) {
+      counts[bucketCount - 1] += 1;
+      return bucketCount - 1;
+    }
+    const relative = (value - min) / bucketWidth;
+    const index = Math.min(bucketCount - 1, Math.floor(relative));
+    counts[index] += 1;
+    return index;
+  });
+
+  const nonZeroCounts = counts.filter((count) => count > 0);
+  if (nonZeroCounts.length === 0) {
+    return emptyNumericComputation(context.values.length);
+  }
+
+  const minCount = Math.min(...nonZeroCounts);
+  const maxCount = Math.max(...nonZeroCounts);
+  const denominator = maxCount - minCount;
+
+  const computeRatio = (count: number) => {
+    if (count <= 0) {
+      return null;
+    }
+
+    if (denominator === 0) {
+      return config.reward === 'most' ? 1 : 0;
+    }
+
+    if (config.reward === 'most') {
+      return (count - minCount) / denominator;
+    }
+
+    return (maxCount - count) / denominator;
+  };
+
+  const scaling: 'linear' | 'logarithmic' | 'exponential' | 'quadratic' =
+    config.scaling === 'logarithmic'
+      ? 'logarithmic'
+      : config.scaling === 'exponential'
+        ? 'exponential'
+        : config.scaling === 'quadratic'
+          ? 'quadratic'
+          : 'linear';
+
+  const scores = bucketIndices.map((index) => {
+    if (index === null) {
+      return null;
+    }
+    const ratio = computeRatio(counts[index]);
+    if (ratio === null) {
+      return null;
+    }
+    return applyScaling(ratio, scaling, config.slope);
+  });
+
+  return {
+    scores,
+    diagnostics: computeDiagnostics(scores)
+  };
+};
+
+const computeSignificanceFlag = (
+  context: AnalysisMethodContext,
+  config?: AnalysisStepConfig
+): AnalysisComputation => {
+  if (!isSignificanceConfig(config)) {
+    return emptyNumericComputation(context.values.length);
+  }
+
+  if (!Number.isFinite(config.significanceLevel)) {
+    return emptyNumericComputation(context.values.length);
+  }
+
+  const numericValues = extractNumericValues(context.values);
+  if (numericValues.length === 0) {
+    return emptyNumericComputation(context.values.length);
+  }
+
+  const coverage = Math.max(0, Math.min(100, config.significanceLevel)) / 100;
+  const alpha = 1 - coverage;
+  if (alpha <= 0 || alpha >= 1) {
+    const defaultScore = config.flagSignificant ? 0 : 1;
+    const scores = context.values.map((value) =>
+      value === null || !Number.isFinite(value) ? null : defaultScore
+    );
+    return { scores, diagnostics: computeDiagnostics(scores) };
+  }
+
+  const sortedValues = [...numericValues].sort((a, b) => a - b);
+
+  const twoSidedThresholds = () => {
+    const halfAlpha = alpha / 2;
+    const lower = computeQuantile(sortedValues, halfAlpha);
+    const upper = computeQuantile(sortedValues, 1 - halfAlpha);
+    return { lower, upper };
+  };
+
+  const mode = config.mode ?? 'two-sided';
+  const tail = config.tail ?? 'upper';
+
+  const oneSidedThreshold = () => {
+    if (tail === 'lower') {
+      return { lower: computeQuantile(sortedValues, alpha), upper: Number.POSITIVE_INFINITY };
+    }
+    return { lower: Number.NEGATIVE_INFINITY, upper: computeQuantile(sortedValues, 1 - alpha) };
+  };
+
+  const { lower, upper } = mode === 'two-sided' ? twoSidedThresholds() : oneSidedThreshold();
+
+  const scores = context.values.map((value) => {
+    if (value === null || !Number.isFinite(value)) {
+      return null;
+    }
+    const isSignificant =
+      mode === 'two-sided'
+        ? value <= lower || value >= upper
+        : tail === 'lower'
+          ? value <= lower
+          : value >= upper;
+    const score = config.flagSignificant ? (isSignificant ? 1 : 0) : isSignificant ? 0 : 1;
+    return score;
+  });
+
+  return {
+    scores,
+    diagnostics: computeDiagnostics(scores)
+  };
+};
+
 export const ANALYSIS_METHODS: AnalysisMethodDefinition[] = [
   {
     id: 'bell-curve-distance',
@@ -254,6 +668,38 @@ export const ANALYSIS_METHODS: AnalysisMethodDefinition[] = [
     description:
       'Define a true/false check for the selected column. You can match a specific value, interpret boolean text, or set a numeric threshold/range. Rows that satisfy the condition receive a score of 1, while the rest receive 0.',
     compute: computeConditionalFlag
+  },
+  {
+    id: 'one-sided-distance',
+    name: 'One-sided distance',
+    shortDescription: 'Scores rows based on how far they sit to one side of a baseline.',
+    description:
+      'Pick a reference point (custom value, average, or median), choose which side of it should earn points, and dial in a linear, exponential, or logarithmic ramp with a custom slope. Distances on the chosen side scale from 0 at the baseline to 1 at the furthest value.',
+    compute: computeOneSidedDistance
+  },
+  {
+    id: 'zero-to-one-scaling',
+    name: '0 to 1 scaling',
+    shortDescription: 'Normalises values between the observed minimum and maximum.',
+    description:
+      'Linearly, exponentially, or logarithmically scale the column so the minimum maps to 0 and the maximum maps to 1. Control the slope to decide how quickly rows race toward the extremes.',
+    compute: computeZeroToOneScaling
+  },
+  {
+    id: 'distribution-density',
+    name: 'Distribution buckets',
+    shortDescription: 'Assign scores based on how densely populated each value band is.',
+    description:
+      'Split the range into equal-width buckets, count how many rows fall into each, and reward either the least- or most-populated buckets. Scores can grow linearly, exponentially, or follow a logarithmic curve with adjustable steepness.',
+    compute: computeDistributionDensity
+  },
+  {
+    id: 'significance-flag',
+    name: 'Significance test',
+    shortDescription: 'Marks rows that pass a custom significance level.',
+    description:
+      'Provide the desired bell-curve coverage (e.g., 95%), choose a one- or two-sided test, pick the active tail if needed, and flag whether significant rows emit 1 or 0.',
+    compute: computeSignificanceFlag
   }
 ];
 
