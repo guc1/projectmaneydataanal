@@ -288,10 +288,35 @@ export const uploadEntries = pgTable(
   })
 );
 
+export const uploadSelections = pgTable(
+  'upload_selections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    buttonKey: text('button_key').notNull(),
+    uploadId: uuid('upload_id')
+      .notNull()
+      .references(() => uploadEntries.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    selectedAt: timestamp('selected_at', { mode: 'date', withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => ({
+    uploadSelectionsUserButtonIdx: uniqueIndex('upload_selections_user_button_key').on(
+      table.userId,
+      table.buttonKey
+    ),
+    uploadSelectionsUploadIdx: index('upload_selections_upload_id_idx').on(table.uploadId)
+  })
+);
+
 export const usersRelations = relations(users, ({ many }) => ({
   accounts: many(accounts),
   sessions: many(sessions),
   uploads: many(uploadEntries),
+  uploadSelections: many(uploadSelections),
   bookings: many(meetingBookings)
 }));
 
@@ -328,9 +353,21 @@ export const meetingBookingsRelations = relations(meetingBookings, ({ one }) => 
   })
 }));
 
-export const uploadEntriesRelations = relations(uploadEntries, ({ one }) => ({
+export const uploadEntriesRelations = relations(uploadEntries, ({ one, many }) => ({
   uploadedBy: one(users, {
     fields: [uploadEntries.uploadedByUserId],
+    references: [users.id]
+  }),
+  selections: many(uploadSelections)
+}));
+
+export const uploadSelectionsRelations = relations(uploadSelections, ({ one }) => ({
+  upload: one(uploadEntries, {
+    fields: [uploadSelections.uploadId],
+    references: [uploadEntries.id]
+  }),
+  user: one(users, {
+    fields: [uploadSelections.userId],
     references: [users.id]
   })
 }));

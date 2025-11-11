@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.6.0",
+    "@radix-ui/react-dialog": "^1.0.5",
     "@radix-ui/react-slot": "^1.0.3",
     "@radix-ui/react-tooltip": "^1.0.7",
     "ai": "^3.4.33",
