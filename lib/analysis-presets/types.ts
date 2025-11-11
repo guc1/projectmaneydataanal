@@ -12,6 +12,11 @@ export type ConditionalFlagConfig =
     }
   | {
       kind: 'conditional-flag';
+      mode: 'boolean';
+      trueValue?: string;
+    }
+  | {
+      kind: 'conditional-flag';
       mode: 'min';
       threshold: number;
     }

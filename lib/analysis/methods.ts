@@ -125,6 +125,18 @@ const computeConditionalFlag = (
   const scores: (number | null)[] = new Array(rawValues.length).fill(null);
 
   switch (config.mode) {
+    case 'boolean': {
+      for (let index = 0; index < rawValues.length; index += 1) {
+        const rawValue = rawValues[index];
+        const normalised = normaliseRawText(rawValue);
+        if (!normalised) {
+          scores[index] = 0;
+          continue;
+        }
+        scores[index] = normalised === 'true' ? 1 : 0;
+      }
+      break;
+    }
     case 'binary': {
       const target = normaliseRawText(config.trueValue);
       if (!target) {
@@ -240,7 +252,7 @@ export const ANALYSIS_METHODS: AnalysisMethodDefinition[] = [
     name: 'Conditional statement',
     shortDescription: 'Outputs 1 when a custom rule is true for the row, otherwise 0.',
     description:
-      'Define a true/false check for the selected column. You can match a specific value or set a numeric threshold/range. Rows that satisfy the condition receive a score of 1, while the rest receive 0.',
+      'Define a true/false check for the selected column. You can match a specific value, interpret boolean text, or set a numeric threshold/range. Rows that satisfy the condition receive a score of 1, while the rest receive 0.',
     compute: computeConditionalFlag
   }
 ];
