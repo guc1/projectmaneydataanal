@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { CheckCircle2, CloudUpload, Files, History, RefreshCcw, Trash2, X } from 'lucide-react';
 import { useSession } from 'next-auth/react';
@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardDescription, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { useUploadContext, type UploadSlotKey } from '@/components/upload/upload-context';
 
 const uploadTargets = [
   {
@@ -520,11 +521,21 @@ function UploadCard({
 }
 
 export function UploadPanel() {
+  const { ingestUpload, clearFile } = useUploadContext();
   const [allUploads, setAllUploads] = useState<UploadRecord[]>([]);
   const [uploadsByTarget, setUploadsByTarget] = useState<Record<string, UploadRecord[]>>({});
-  const [selectedUploads, setSelectedUploads] = useState<Record<string, string | null>>({});
+  const [selectedUploads, setSelectedUploads] = useState<Record<UploadSlotKey, string | null>>({
+    dataset: null,
+    dictionary: null,
+    summary: null
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const loadedSelectionsRef = useRef<Record<UploadSlotKey, string | null>>({
+    dataset: null,
+    dictionary: null,
+    summary: null
+  });
 
   const fetchUploads = useCallback(async () => {
     setIsLoading(true);
@@ -556,9 +567,14 @@ export function UploadPanel() {
       }
       setUploadsByTarget(mapped);
 
-      const selectionMap: Record<string, string | null> = {};
+      const selectionMap: Record<UploadSlotKey, string | null> = {
+        dataset: null,
+        dictionary: null,
+        summary: null
+      };
       for (const target of uploadTargets) {
-        selectionMap[target.key] = allPayload.selected?.[target.key] ?? null;
+        const slot = target.key as UploadSlotKey;
+        selectionMap[slot] = allPayload.selected?.[target.key] ?? null;
       }
       setSelectedUploads(selectionMap);
     } catch (err) {
@@ -572,6 +588,82 @@ export function UploadPanel() {
   useEffect(() => {
     void fetchUploads();
   }, [fetchUploads]);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const syncSelectedUploads = async () => {
+      const entries = Object.entries(selectedUploads) as [UploadSlotKey, string | null][];
+
+      for (const [slot, uploadId] of entries) {
+        const previousId = loadedSelectionsRef.current[slot];
+
+        if (uploadId === previousId) {
+          continue;
+        }
+
+        if (uploadId) {
+          try {
+            const response = await fetch(`/api/uploads/${uploadId}`);
+            if (!response.ok) {
+              throw new Error('Unable to load the selected file.');
+            }
+
+            const payload = (await response.json()) as {
+              upload: { fileName: string };
+              content: string;
+              mimeType?: string;
+            };
+
+            const mimeType = payload.mimeType
+              ? payload.mimeType
+              : payload.upload.fileName.toLowerCase().endsWith('.json')
+                ? 'application/json'
+                : 'text/csv';
+
+            await ingestUpload(slot, {
+              name: payload.upload.fileName,
+              content: payload.content,
+              mimeType
+            });
+
+            if (!isActive) {
+              return;
+            }
+
+            loadedSelectionsRef.current = {
+              ...loadedSelectionsRef.current,
+              [slot]: uploadId
+            };
+          } catch (err) {
+            console.error(err);
+            if (!isActive) {
+              return;
+            }
+            setError((previous) => previous ?? 'Unable to sync selected files. Try refreshing.');
+          }
+        } else if (previousId) {
+          try {
+            await clearFile(slot);
+          } finally {
+            if (!isActive) {
+              return;
+            }
+            loadedSelectionsRef.current = {
+              ...loadedSelectionsRef.current,
+              [slot]: null
+            };
+          }
+        }
+      }
+    };
+
+    void syncSelectedUploads();
+
+    return () => {
+      isActive = false;
+    };
+  }, [selectedUploads, ingestUpload, clearFile]);
 
   return (
     <section className="mt-12">
