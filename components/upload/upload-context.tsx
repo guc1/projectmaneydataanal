@@ -31,6 +31,11 @@ type UploadContextValue = {
   isReady: boolean;
   missing: UploadSlotKey[];
   registerFile: (slot: UploadSlotKey, file: File) => Promise<void>;
+  ingestUpload: (
+    slot: UploadSlotKey,
+    payload: { name: string; content: string; mimeType?: string },
+    options?: { persist?: boolean }
+  ) => Promise<void>;
   clearFile: (slot: UploadSlotKey) => Promise<void>;
 };
 
@@ -201,6 +206,18 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
     [processUpload]
   );
 
+  const ingestUpload = useCallback(
+    async (
+      slot: UploadSlotKey,
+      payload: { name: string; content: string; mimeType?: string },
+      options: { persist?: boolean } = {}
+    ) => {
+      const shouldPersist = options.persist ?? true;
+      await processUpload(slot, payload.name, payload.content, shouldPersist, payload.mimeType);
+    },
+    [processUpload]
+  );
+
   const clearFile = useCallback(
     async (slot: UploadSlotKey) => {
       setErrors((prev) => ({ ...prev, [slot]: null }));
@@ -221,6 +238,7 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
     isReady,
     missing,
     registerFile,
+    ingestUpload,
     clearFile
   };
 
