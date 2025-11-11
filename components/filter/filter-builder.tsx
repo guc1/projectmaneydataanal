@@ -234,6 +234,7 @@ export function FilterBuilder() {
   const [filterError, setFilterError] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<'category' | 'single' | 'chain' | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [isBrowsingMetrics, setIsBrowsingMetrics] = useState(true);
   const [savedPresets, setSavedPresets] = useState<SavedPreset[]>([]);
   const [savedChains, setSavedChains] = useState<SavedChain[]>([]);
 
@@ -387,9 +388,10 @@ export function FilterBuilder() {
     const operators = getAvailableOperators(column.data_type);
     setForm({ column, operator: operators[0], valuePrimary: '', valueSecondary: '', error: undefined });
     setFilterError(null);
-    setActivePanel('category');
+    setActivePanel(null);
     const group = CATEGORY_GROUPS.find((category) => category.metrics.includes(column.metric));
     setSelectedCategory(group ? group.id : null);
+    setIsBrowsingMetrics(false);
   };
 
   const handleAddToFlow = () => {
@@ -498,11 +500,21 @@ export function FilterBuilder() {
       if (next === 'category') {
         setSelectedCategory((current) => current ?? CATEGORY_GROUPS[0]?.id ?? null);
       }
+      if (panel === 'category') {
+        setIsBrowsingMetrics(next === 'category');
+      } else {
+        setIsBrowsingMetrics(false);
+      }
       return next;
     });
     if (panel === 'category') {
       setFilterError(null);
     }
+  };
+
+  const handleRevealMetricBrowser = () => {
+    setIsBrowsingMetrics(true);
+    setActivePanel('category');
   };
 
   const handleRemoveFilter = (id: string) => {
@@ -538,9 +550,69 @@ export function FilterBuilder() {
   };
 
   const totalRows = datasetRows?.length ?? 0;
+  const shouldShowCategoryBrowser = (!form.column || isBrowsingMetrics) && activePanel !== 'single' && activePanel !== 'chain';
 
   return (
-    <div className="mt-16 grid gap-10 xl:grid-cols-[1.35fr_1fr]">
+    <div className="mt-16 space-y-10">
+      <Card className="border border-white/10 bg-background/80 p-6 shadow-lg shadow-accent/10 lg:p-8">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-3">
+            <CardTitle className="flex items-center gap-2 text-xl">
+              <Filter size={20} /> Apply flow
+            </CardTitle>
+            <CardDescription className="max-w-2xl text-base text-muted-foreground">
+              Run the current flow against the uploaded dataset, preview the remaining rows, and export the result.
+            </CardDescription>
+          </div>
+          <div className="grid w-full gap-3 sm:grid-cols-3 lg:w-auto">
+            <div className="rounded-2xl border border-white/10 bg-background/70 p-4 text-sm">
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Uploaded rows</p>
+              <p className="mt-2 text-lg font-semibold text-foreground">{totalRows.toLocaleString()}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-background/70 p-4 text-sm">
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Filters in flow</p>
+              <p className="mt-2 text-lg font-semibold text-foreground">{filters.length}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-background/70 p-4 text-sm">
+              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Preview</p>
+              <p className="mt-2 text-lg font-semibold text-foreground">
+                {filterResult === null ? '—' : filterResult.length.toLocaleString()}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-8 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center">
+            <Button
+              type="button"
+              className="w-full gap-2 text-base font-semibold sm:w-auto"
+              onClick={handleFilterDown}
+              disabled={filters.length === 0 || !datasetRows}
+            >
+              <Filter size={18} /> Filter
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full gap-2 sm:w-auto"
+              onClick={handleExportFiltered}
+              disabled={!filterResult || !datasetColumns}
+            >
+              <Download size={16} /> Download filtered CSV
+            </Button>
+          </div>
+          <p className="text-sm text-muted-foreground lg:max-w-md">
+            {filterResult === null
+              ? totalRows > 0
+                ? 'Apply the flow to reveal how many wallets remain.'
+                : 'Upload a dataset to begin filtering.'
+              : `Filtered rows: ${filterResult.length.toLocaleString()} of ${totalRows.toLocaleString()}`}
+          </p>
+        </div>
+        {filterError && <p className="mt-4 text-sm text-red-400">{filterError}</p>}
+      </Card>
+
       <section>
         <Card className="h-full">
           <div className="space-y-8">
@@ -591,114 +663,185 @@ export function FilterBuilder() {
               </Button>
             </div>
 
-            {activePanel === 'category' && (
-              <div className="rounded-2xl border border-white/10 bg-background/80 p-6 shadow-inner">
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Categories</p>
-                <div className="mt-4 flex flex-wrap gap-3">
-                  {CATEGORY_GROUPS.map((group) => {
-                    const availableCount = group.metrics.filter((metric) =>
-                      availableColumns.some((column) => column.metric === metric)
-                    ).length;
-                    const isActive = selectedCategory === group.id;
-                    const hasColumns = availableCount > 0;
-                    return (
-                      <button
-                        key={group.id}
+            <div className="rounded-2xl border border-white/10 bg-background/80 p-6 shadow-inner">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">1. Choose a metric</h4>
+                {form.column && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge className="border-white/20 bg-transparent text-xs text-muted-foreground">
+                      {form.column.data_type}
+                    </Badge>
+                    {!shouldShowCategoryBrowser && (
+                      <Button
                         type="button"
-                        onClick={() => hasColumns && setSelectedCategory(group.id)}
-                        disabled={!hasColumns}
-                        className={cn(
-                          'min-w-[140px] rounded-xl border border-white/5 bg-white/5 px-4 py-3 text-left text-sm transition hover:border-accent/40 hover:bg-white/10',
-                          isActive && 'border-accent/60 bg-accent/15 text-foreground shadow-glow',
-                          !hasColumns && 'cursor-not-allowed opacity-50 hover:border-white/5 hover:bg-white/5'
-                        )}
+                        variant="muted"
+                        size="sm"
+                        onClick={handleRevealMetricBrowser}
+                        className="rounded-full border border-white/10 bg-white/10 px-3 text-xs"
                       >
-                        <span className="block font-semibold text-foreground">{group.label}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {hasColumns ? `${availableCount} metrics` : 'Unavailable'}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {selectedCategoryGroup && (
-                  <div className="mt-6">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      {selectedCategoryGroup.label} metrics
-                    </p>
-                    <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                      {categoryColumns.length === 0 && (
-                        <p className="col-span-full rounded-2xl border border-dashed border-white/10 bg-white/5 px-5 py-12 text-center text-sm text-muted-foreground">
-                          No uploaded columns match this category yet.
-                        </p>
-                      )}
-                      {categoryColumns.map((column) => {
-                        const active = form.column?.metric === column.metric;
-                        return (
-                          <Tooltip.Provider key={column.metric} delayDuration={150}>
-                            <Tooltip.Root>
-                              <Tooltip.Trigger asChild>
-                                <button
-                                  type="button"
-                                  onClick={() => handleSelectColumn(column)}
-                                  className={cn(
-                                    'h-full w-full rounded-2xl border border-white/5 bg-white/5 p-4 text-left text-sm transition hover:border-accent/40 hover:bg-white/10',
-                                    active && 'border-accent/60 bg-accent/20 shadow-glow'
-                                  )}
-                                >
-                                  <div className="flex items-center justify-between gap-3">
-                                    <span className="font-semibold text-foreground">{column.metric}</span>
-                                    <Badge className="border-white/20 bg-transparent text-xs text-muted-foreground">
-                                      {column.data_type}
-                                    </Badge>
-                                  </div>
-                                  <p className="mt-2 h-[3.3rem] overflow-hidden text-xs text-muted-foreground">
-                                    {column.what_it_is}
-                                  </p>
-                                  <div className="mt-3 flex items-center gap-3 text-[11px] text-muted-foreground">
-                                    {column.average !== undefined && (
-                                      <span>
-                                        avg: <strong className="text-foreground">{formatNumber(column.average)}</strong>
-                                      </span>
-                                    )}
-                                    {column.median !== undefined && (
-                                      <span>
-                                        median: <strong className="text-foreground">{formatNumber(column.median)}</strong>
-                                      </span>
-                                    )}
-                                  </div>
-                                </button>
-                              </Tooltip.Trigger>
-                              <Tooltip.Content
-                                side="bottom"
-                                className="max-w-xs rounded-md bg-muted/95 p-3 text-xs text-foreground shadow-lg"
-                              >
-                                <p className="font-semibold">{column.metric}</p>
-                                <p className="mt-1 text-[11px] text-muted-foreground">{column.what_it_is}</p>
-                                <div className="mt-2 space-y-1 text-[11px]">
-                                  <p>
-                                    <span className="font-semibold text-foreground">Data type:</span> {column.data_type}
-                                  </p>
-                                  <p>
-                                    <span className="font-semibold text-foreground">Higher is:</span> {column.higher_is}
-                                  </p>
-                                  {column.units_or_range && (
-                                    <p>
-                                      <span className="font-semibold text-foreground">Units / range:</span> {column.units_or_range}
-                                    </p>
-                                  )}
-                                </div>
-                              </Tooltip.Content>
-                            </Tooltip.Root>
-                          </Tooltip.Provider>
-                        );
-                      })}
-                    </div>
+                        Browse metrics
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>
-            )}
+
+              {form.column && !shouldShowCategoryBrowser && (
+                <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="space-y-2">
+                      <p className="text-base font-semibold text-foreground">{form.column.metric}</p>
+                      <p className="text-xs text-muted-foreground">{form.column.what_it_is}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                      <span className="rounded-full bg-background/70 px-3 py-1">
+                        Higher is <strong className="text-foreground">{form.column.higher_is}</strong>
+                      </span>
+                      {form.column.units_or_range && (
+                        <span className="rounded-full bg-background/70 px-3 py-1">
+                          Range: <strong className="text-foreground">{form.column.units_or_range}</strong>
+                        </span>
+                      )}
+                      <span className="rounded-full bg-background/70 px-3 py-1">
+                        Type: <strong className="text-foreground">{form.column.data_type}</strong>
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-3 text-xs text-muted-foreground">
+                    {form.column.average !== undefined && (
+                      <span className="rounded-full bg-background/70 px-3 py-1">
+                        avg: <strong className="text-foreground">{formatNumber(form.column.average)}</strong>
+                      </span>
+                    )}
+                    {form.column.median !== undefined && (
+                      <span className="rounded-full bg-background/70 px-3 py-1">
+                        median: <strong className="text-foreground">{formatNumber(form.column.median)}</strong>
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <Button
+                      type="button"
+                      variant="muted"
+                      size="sm"
+                      onClick={handleRevealMetricBrowser}
+                      className="rounded-full border border-white/10 bg-white/10 px-4"
+                    >
+                      Pick a different metric
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {shouldShowCategoryBrowser && (
+                <div className="mt-6">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Categories</p>
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    {CATEGORY_GROUPS.map((group) => {
+                      const availableCount = group.metrics.filter((metric) =>
+                        availableColumns.some((column) => column.metric === metric)
+                      ).length;
+                      const isActive = selectedCategory === group.id;
+                      const hasColumns = availableCount > 0;
+                      return (
+                        <button
+                          key={group.id}
+                          type="button"
+                          onClick={() => hasColumns && setSelectedCategory(group.id)}
+                          disabled={!hasColumns}
+                          className={cn(
+                            'min-w-[160px] rounded-xl border border-white/5 bg-white/5 px-5 py-3 text-left text-sm transition hover:border-accent/40 hover:bg-white/10',
+                            isActive && 'border-accent/60 bg-accent/15 text-foreground shadow-glow',
+                            !hasColumns && 'cursor-not-allowed opacity-50 hover:border-white/5 hover:bg-white/5'
+                          )}
+                        >
+                          <span className="block font-semibold text-foreground">{group.label}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {hasColumns ? `${availableCount} metrics` : 'Unavailable'}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {selectedCategoryGroup && (
+                    <div className="mt-6">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        {selectedCategoryGroup.label} metrics
+                      </p>
+                      <div className="mt-4 grid gap-5 md:grid-cols-2">
+                        {categoryColumns.length === 0 && (
+                          <p className="col-span-full rounded-2xl border border-dashed border-white/10 bg-white/5 px-5 py-12 text-center text-sm text-muted-foreground">
+                            No uploaded columns match this category yet.
+                          </p>
+                        )}
+                        {categoryColumns.map((column) => {
+                          const active = form.column?.metric === column.metric;
+                          return (
+                            <Tooltip.Provider key={column.metric} delayDuration={150}>
+                              <Tooltip.Root>
+                                <Tooltip.Trigger asChild>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSelectColumn(column)}
+                                    className={cn(
+                                      'h-full w-full rounded-2xl border border-white/5 bg-white/5 p-5 text-left text-sm transition hover:border-accent/40 hover:bg-white/10',
+                                      active && 'border-accent/60 bg-accent/20 shadow-glow'
+                                    )}
+                                  >
+                                    <div className="flex items-start justify-between gap-3">
+                                      <span className="font-semibold text-foreground">{column.metric}</span>
+                                      <Badge className="border-white/20 bg-transparent text-xs text-muted-foreground">
+                                        {column.data_type}
+                                      </Badge>
+                                    </div>
+                                    <p className="mt-3 min-h-[3.75rem] overflow-hidden text-xs leading-5 text-muted-foreground">
+                                      {column.what_it_is}
+                                    </p>
+                                    <div className="mt-4 flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+                                      {column.average !== undefined && (
+                                        <span>
+                                          avg: <strong className="text-foreground">{formatNumber(column.average)}</strong>
+                                        </span>
+                                      )}
+                                      {column.median !== undefined && (
+                                        <span>
+                                          median: <strong className="text-foreground">{formatNumber(column.median)}</strong>
+                                        </span>
+                                      )}
+                                    </div>
+                                  </button>
+                                </Tooltip.Trigger>
+                                <Tooltip.Content
+                                  side="bottom"
+                                  className="max-w-xs rounded-md bg-muted/95 p-3 text-xs text-foreground shadow-lg"
+                                >
+                                  <p className="font-semibold">{column.metric}</p>
+                                  <p className="mt-1 text-[11px] text-muted-foreground">{column.what_it_is}</p>
+                                  <div className="mt-2 space-y-1 text-[11px]">
+                                    <p>
+                                      <span className="font-semibold text-foreground">Data type:</span> {column.data_type}
+                                    </p>
+                                    <p>
+                                      <span className="font-semibold text-foreground">Higher is:</span> {column.higher_is}
+                                    </p>
+                                    {column.units_or_range && (
+                                      <p>
+                                        <span className="font-semibold text-foreground">Units / range:</span> {column.units_or_range}
+                                      </p>
+                                    )}
+                                  </div>
+                                </Tooltip.Content>
+                              </Tooltip.Root>
+                            </Tooltip.Provider>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {activePanel === 'single' && (
               <div className="rounded-2xl border border-white/10 bg-background/80 p-6 shadow-inner">
@@ -767,11 +910,18 @@ export function FilterBuilder() {
             )}
 
             <div className="rounded-2xl border border-white/10 bg-background/70 p-6">
-              <div className="flex items-center justify-between gap-3">
-                <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">2. Configure the rule</h4>
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h4 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">2. Configure the rule</h4>
+                  {form.column && (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {form.column.metric} · {form.column.what_it_is}
+                    </p>
+                  )}
+                </div>
                 {form.column && (
                   <Badge className="border-white/20 bg-accent/20 text-xs text-accent">
-                    {form.column.metric}
+                    {form.column.data_type}
                   </Badge>
                 )}
               </div>
@@ -913,67 +1063,6 @@ export function FilterBuilder() {
           </div>
         </Card>
       </section>
-
-      <aside className="space-y-6">
-        <Card className="space-y-6">
-          <div>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <Filter size={18} /> Apply flow
-            </CardTitle>
-            <CardDescription>
-              Run the current flow against the uploaded dataset, preview the remaining rows, and export the result.
-            </CardDescription>
-          </div>
-
-          <div className="rounded-2xl border border-white/10 bg-background/70 p-5">
-            <div className="flex flex-col gap-4 text-sm text-muted-foreground">
-              <div className="flex items-center justify-between">
-                <span>Uploaded rows</span>
-                <span className="text-base font-semibold text-foreground">{totalRows.toLocaleString()}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>Filters in flow</span>
-                <span className="text-base font-semibold text-foreground">{filters.length}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>Preview</span>
-                <span className="text-base font-semibold text-foreground">
-                  {filterResult === null ? '—' : filterResult.length.toLocaleString()}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <Button
-              type="button"
-              className="w-full gap-2 text-base font-semibold"
-              onClick={handleFilterDown}
-              disabled={filters.length === 0 || !datasetRows}
-            >
-              <Filter size={18} /> Filter
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full gap-2"
-              onClick={handleExportFiltered}
-              disabled={!filterResult || !datasetColumns}
-            >
-              <Download size={16} /> Download filtered CSV
-            </Button>
-          </div>
-
-          <p className="text-sm text-muted-foreground">
-            {filterResult === null
-              ? totalRows > 0
-                ? 'Apply the flow to reveal how many wallets remain.'
-                : 'Upload a dataset to begin filtering.'
-              : `Filtered rows: ${filterResult.length.toLocaleString()} of ${totalRows.toLocaleString()}`}
-          </p>
-          {filterError && <p className="text-sm text-red-400">{filterError}</p>}
-        </Card>
-      </aside>
     </div>
   );
 }
