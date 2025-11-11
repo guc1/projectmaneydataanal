@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/button';
 
 const navigationItems = [
   { href: '/upload', label: 'Upload' },
-  { href: '/filter', label: 'Filter' }
+  { href: '/filter', label: 'Filter' },
+  { href: '/analysis', label: 'Analysis' }
 ];
 
 export function SiteHeader() {
