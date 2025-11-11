@@ -332,6 +332,25 @@ export const filterPresets = pgTable(
   })
 );
 
+export const analysisPresets = pgTable(
+  'analysis_presets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    template: jsonb('template').notNull(),
+    createdByUserId: uuid('created_by_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { mode: 'date', withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => ({
+    analysisPresetsUserIdx: index('analysis_presets_user_idx').on(table.createdByUserId),
+    analysisPresetsCreatedIdx: index('analysis_presets_created_idx').on(table.createdAt)
+  })
+);
+
 export const filterPresetChains = pgTable(
   'filter_preset_chains',
   {
@@ -351,6 +370,25 @@ export const filterPresetChains = pgTable(
   })
 );
 
+export const analysisPresetChains = pgTable(
+  'analysis_preset_chains',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    chain: jsonb('chain').notNull(),
+    createdByUserId: uuid('created_by_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { mode: 'date', withTimezone: true })
+      .defaultNow()
+      .notNull()
+  },
+  (table) => ({
+    analysisPresetChainsUserIdx: index('analysis_preset_chains_user_idx').on(table.createdByUserId),
+    analysisPresetChainsCreatedIdx: index('analysis_preset_chains_created_idx').on(table.createdAt)
+  })
+);
+
 export const usersRelations = relations(users, ({ many }) => ({
   accounts: many(accounts),
   sessions: many(sessions),
@@ -358,7 +396,9 @@ export const usersRelations = relations(users, ({ many }) => ({
   uploadSelections: many(uploadSelections),
   bookings: many(meetingBookings),
   filterPresets: many(filterPresets),
-  filterPresetChains: many(filterPresetChains)
+  filterPresetChains: many(filterPresetChains),
+  analysisPresets: many(analysisPresets),
+  analysisPresetChains: many(analysisPresetChains)
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
@@ -423,6 +463,20 @@ export const filterPresetsRelations = relations(filterPresets, ({ one }) => ({
 export const filterPresetChainsRelations = relations(filterPresetChains, ({ one }) => ({
   author: one(users, {
     fields: [filterPresetChains.createdByUserId],
+    references: [users.id]
+  })
+}));
+
+export const analysisPresetsRelations = relations(analysisPresets, ({ one }) => ({
+  author: one(users, {
+    fields: [analysisPresets.createdByUserId],
+    references: [users.id]
+  })
+}));
+
+export const analysisPresetChainsRelations = relations(analysisPresetChains, ({ one }) => ({
+  author: one(users, {
+    fields: [analysisPresetChains.createdByUserId],
     references: [users.id]
   })
 }));
