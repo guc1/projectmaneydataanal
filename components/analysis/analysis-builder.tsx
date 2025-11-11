@@ -680,12 +680,17 @@ export function AnalysisBuilder() {
       return;
     }
 
-    if (operators.length !== steps.length - 1) {
-      setAnalysisError('Finish configuring the formula before running the analysis.');
-      return;
+    const requiredOperators = Math.max(0, steps.length - 1);
+    const normalisedOperators = operators.slice(0, requiredOperators);
+
+    if (normalisedOperators.length !== operators.length || operators.length !== requiredOperators) {
+      while (normalisedOperators.length < requiredOperators) {
+        normalisedOperators.push('+');
+      }
+      setOperators(normalisedOperators);
     }
 
-    const { result } = evaluateFormula(datasetRows, steps, operators);
+    const { result } = evaluateFormula(datasetRows, steps, normalisedOperators);
 
     const computedRows = datasetRows.map((row, index) => ({
       ...row,
